@@ -45,6 +45,8 @@ Goal: ship v1 as soon as possible. Rule: v1 = the core loop end to end (recorder
 
 **Post-v1:** Ask (web + mobile), Highlights, marking moments, speaker naming + voice match, corrections glossary, folders, MCP/agent connections and phone approval, Sign in with ChatGPT (PR #321), phone-mic recording + live transcription, Photo/Note capture, "Only this phone" home (needs on-device transcription), summary styles, automations, share sheet, transcription language display.
 
+Mobile stack: Expo (decided 2026-10-02). Glass via `expo-glass-effect` behind a single `GlassSurface` wrapper. Build tasks: `docs/design/v1-tasks.md` (local, not yet published as issues).
+
 Decided 2026-10-02: Sign in with ChatGPT, phone-mic recording and "Only this phone" are all post-v1.
 
 ## 3. Color
