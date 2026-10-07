@@ -11,6 +11,22 @@ installations and the locked Python environment.
 | `pnpm test` | 822 passed, 10 skipped; 110 test files passed and 4 skipped |
 | Pipeline `uv run --frozen --group dev pytest` | 13 passed |
 | Pipeline Ruff lint and formatting | Passed |
+| Enhanced Compose configuration | Passed with disposable placeholder credentials; no external worktree paths |
+| Application and pipeline Docker builds | Passed on Linux/arm64 from a clean public checkout with the final Dockerfile patch |
+| Isolated pipeline container startup and `/health` | Passed without host volumes or live credentials |
+
+[GitHub CI on the initial enhancement commit](https://github.com/JeremyL691/riffado/actions/runs/37580537050)
+also passed all five jobs, including the application build. With its disposable
+Postgres service enabled, the TypeScript suite reported 826 passed and 6 skipped;
+the pipeline suite reported 13 passed. This is a separate result from the local
+suite above.
+
+The Docker dependency stage follows the upstream pnpm lockfile installation fix,
+and Bun is pinned to 1.4.0. Builds used no real credentials or source-map upload
+secrets. Inherited non-fatal Edge Runtime, build-time auth configuration, and
+PostHog build-argument diagnostics remain; a successful build is not a claim that
+the project is warning-free. The final runtime image was checked for its server
+and migration artifacts and contained neither `.env` nor Git metadata.
 
 The pipeline tests cover chunk boundaries, source-audio timestamp context,
 timestamp rejection and restoration, text-only responses, durable store reopen,

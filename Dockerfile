@@ -1,5 +1,5 @@
 # Base image with Bun
-FROM oven/bun:1 AS base
+FROM oven/bun:1.4.0 AS base
 WORKDIR /app
 
 # Install dependencies
@@ -8,9 +8,12 @@ WORKDIR /app
 # `content/docs/`, which aren't present in this hermetic deps stage --
 # only `package.json` + the lockfile are. We regenerate fumadocs sources
 # explicitly in the builder stage below, where the full tree is available.
-FROM base AS deps
+FROM node:22.20.0-bookworm-slim AS deps
+WORKDIR /app
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable && corepack prepare pnpm@11.7.0 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN bun install --frozen-lockfile --ignore-scripts
+RUN pnpm install --frozen-lockfile --ignore-scripts
 
 # Build Next.js
 FROM base AS builder
