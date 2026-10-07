@@ -97,6 +97,7 @@ vi.mock("@/db", () => ({
         select: vi.fn(),
         insert: vi.fn(),
         update: vi.fn(),
+        delete: vi.fn(),
         transaction: vi.fn(),
     },
 }));
@@ -163,6 +164,19 @@ vi.mock("@/lib/plaud/client-factory", () => ({
     createPlaudClient: vi.fn(),
 }));
 
+vi.mock("@/lib/transcription/ffmpeg", () => ({
+    transcodeToMp3: vi.fn().mockResolvedValue(Buffer.from("fake-mp3-bytes")),
+    transcodeToMp3Segments: vi.fn(() =>
+        (async function* () {
+            yield {
+                buffer: Buffer.from("fake-mp3-chunk"),
+                index: 0,
+                count: 1,
+            };
+        })(),
+    ),
+}));
+
 import { OpenAI } from "openai";
 import { db } from "@/db";
 import { transcribeRecording } from "@/lib/transcription/transcribe-recording";
@@ -185,6 +199,7 @@ describe("issue #101 — transcribeRecording sends chunking_strategy for diarize
             plaudFileId: "plaud-1",
             filename: "Some Recording",
             storagePath: "rec-101.mp3",
+            duration: 60_000,
             deletedAt: null,
         };
         const credsRow = {
@@ -275,6 +290,11 @@ describe("issue #101 — transcribeRecording sends chunking_strategy for diarize
         (db.transaction as Mock).mockImplementation(
             async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx),
         );
+        // Stale-summary invalidation on forced re-transcribe issues a
+        // top-level `db.delete(aiEnhancements)` outside the transaction.
+        (db.delete as Mock).mockReturnValue({
+            where: vi.fn().mockResolvedValue(undefined),
+        });
     }
 
     beforeEach(() => {

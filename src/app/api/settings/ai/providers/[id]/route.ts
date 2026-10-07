@@ -2,12 +2,14 @@ import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { apiCredentials, userSettings } from "@/db/schema";
+import { supportsEnhancement } from "@/lib/ai/provider-presets";
 import { setDefaultTranscriptionProvider } from "@/lib/ai/set-default-transcription";
 import { validateAiBaseUrl } from "@/lib/ai/validate-base-url";
 import { requireApiSession } from "@/lib/auth-server";
 import { encrypt } from "@/lib/encryption";
 import { env } from "@/lib/env";
 import { AppError, apiHandler, ErrorCode } from "@/lib/errors";
+import { validateElevenLabsBaseUrl } from "@/lib/transcription/elevenlabs-transcribe";
 
 type IdContext = { params: Promise<{ id: string }> };
 
@@ -40,6 +42,15 @@ export const PUT = apiHandler<IdContext>(async (request, context) => {
         throw new AppError(ErrorCode.NOT_FOUND, "Provider not found", 404);
     }
 
+    if (isDefaultEnhancement && !supportsEnhancement(existing.provider)) {
+        throw new AppError(
+            ErrorCode.INVALID_INPUT,
+            `${existing.provider} does not support AI enhancements (transcription only)`,
+            400,
+            { field: "isDefaultEnhancement" },
+        );
+    }
+
     // On hosted, the app process can't reach the user's machine — reject
     // localhost / loopback baseUrls (e.g. LM Studio, Ollama) with a clear
     // message. Self-host accepts everything.
@@ -50,6 +61,19 @@ export const PUT = apiHandler<IdContext>(async (request, context) => {
         throw new AppError(ErrorCode.INVALID_INPUT, baseUrlCheck.message, 400, {
             field: "baseUrl",
         });
+    }
+    if (existing.provider === "ElevenLabs") {
+        const elevenLabsBaseUrlCheck = validateElevenLabsBaseUrl(baseUrl, {
+            isHosted: env.IS_HOSTED,
+        });
+        if (!elevenLabsBaseUrlCheck.ok) {
+            throw new AppError(
+                ErrorCode.INVALID_INPUT,
+                elevenLabsBaseUrlCheck.message,
+                400,
+                { field: "baseUrl" },
+            );
+        }
     }
 
     // Use a transaction to ensure atomic update of default providers

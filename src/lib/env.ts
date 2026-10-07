@@ -168,7 +168,7 @@ const baseEnvSchema = z.object({
         .transform((val) => (val ? Number(val) : 12))
         .pipe(z.number().int().positive()),
 
-    /** OpenAI-style audio transcription request timeout in milliseconds. */
+    /** OpenAI-compatible transcription request timeout (Whisper and chat-style). */
     WHISPER_REQUEST_TIMEOUT_MS: z
         .string()
         .regex(/^\d+$/, "WHISPER_REQUEST_TIMEOUT_MS must be a positive integer")
@@ -197,6 +197,21 @@ const baseEnvSchema = z.object({
             message: "AUDIO_PIPELINE_TOKEN must be at least 32 characters",
         }),
 
+    // Per-user hourly cap on auto-generated summaries (post-transcription
+    // path only -- the manual "Generate summary" button is not throttled).
+    // Defaults to 60/hour. Caps the cost blast radius if a misconfigured
+    // sync replays N recordings or an upstream provider keeps a quota
+    // alive but degraded. Range 1..600.
+    AUTO_SUMMARY_RATE_LIMIT_PER_HOUR: z
+        .string()
+        .regex(
+            /^\d+$/,
+            "AUTO_SUMMARY_RATE_LIMIT_PER_HOUR must be a positive integer",
+        )
+        .optional()
+        .transform((val) => (val ? Number(val) : 60))
+        .pipe(z.number().int().positive().max(600)),
+
     SMTP_HOST: z.string().optional(),
     SMTP_PORT: z
         .string()
@@ -208,9 +223,13 @@ const baseEnvSchema = z.object({
         .transform((val) => val === "true"),
     SMTP_USER: z.string().optional(),
     SMTP_PASSWORD: z.string().optional(),
-    /** Rybbit analytics (hosted only). Inert unless both site id and host are set. */
-    RYBBIT_SITE_ID: z.string().optional(),
-    RYBBIT_HOST: z.string().url("RYBBIT_HOST must be a valid URL").optional(),
+    /**
+     * Open Analytics (hosted only). Inert unless both the tracking key
+     * and host are set. Script is `${OA_HOST}/oa.js`; collector is
+     * OA_HOST. Cookieless (`data-storage="none"`); not gated on a banner.
+     */
+    OA_TRACKING_KEY: z.string().optional(),
+    OA_HOST: z.string().url("OA_HOST must be a valid URL").optional(),
 
     /**
      * PostHog analytics (hosted-only, hard-gated on IS_HOSTED regardless of
@@ -772,11 +791,13 @@ function validateEnv(): Env {
             AUDIO_PIPELINE_ENABLED: process.env.AUDIO_PIPELINE_ENABLED,
             AUDIO_PIPELINE_BASE_URL: process.env.AUDIO_PIPELINE_BASE_URL,
             AUDIO_PIPELINE_TOKEN: process.env.AUDIO_PIPELINE_TOKEN,
+            AUTO_SUMMARY_RATE_LIMIT_PER_HOUR:
+                process.env.AUTO_SUMMARY_RATE_LIMIT_PER_HOUR,
             SMTP_HOST: process.env.SMTP_HOST,
             SMTP_PORT: process.env.SMTP_PORT,
             SMTP_SECURE: process.env.SMTP_SECURE,
-            RYBBIT_SITE_ID: process.env.RYBBIT_SITE_ID,
-            RYBBIT_HOST: process.env.RYBBIT_HOST,
+            OA_TRACKING_KEY: process.env.OA_TRACKING_KEY,
+            OA_HOST: process.env.OA_HOST,
             POSTHOG_KEY: process.env.POSTHOG_KEY,
             SMTP_USER: process.env.SMTP_USER,
             SMTP_PASSWORD: process.env.SMTP_PASSWORD,

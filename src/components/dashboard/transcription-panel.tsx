@@ -14,6 +14,10 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { TranscribeInBrowserButton } from "@/components/dashboard/transcribe-in-browser-button";
+import {
+    RichMarkdown,
+    SpeakerTranscript,
+} from "@/components/recordings/rich-content";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -24,7 +28,6 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { useTranscriptionSummary } from "@/hooks/use-transcription-summary";
-import { SUMMARY_PRESETS } from "@/lib/ai/summary-presets";
 import type { Recording } from "@/types/recording";
 
 interface Transcription {
@@ -259,6 +262,7 @@ export function TranscriptionPanel({
         setSummaryExpanded,
         summaryPreset,
         setSummaryPreset,
+        summaryPromptOptions,
         handleSummarize,
         handleDeleteSummary,
     } = useTranscriptionSummary({
@@ -501,9 +505,10 @@ export function TranscriptionPanel({
                                         })}
                                     </ol>
                                 ) : (
-                                    <p className="text-sm whitespace-pre-wrap leading-relaxed">
-                                        {activeTranscript.text}
-                                    </p>
+                                    <SpeakerTranscript
+                                        text={activeTranscript.text}
+                                        className="text-sm"
+                                    />
                                 )}
                             </div>
                             <div className="flex items-center gap-4 text-xs text-muted-foreground pt-2 border-t">
@@ -646,7 +651,7 @@ export function TranscriptionPanel({
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
-                                            {Object.values(SUMMARY_PRESETS).map(
+                                            {summaryPromptOptions.map(
                                                 (preset) => (
                                                     <SelectItem
                                                         key={preset.id}
@@ -717,10 +722,10 @@ export function TranscriptionPanel({
                                 {summaryExpanded && (
                                     <div className="space-y-4">
                                         {/* Summary text */}
-                                        <div className="bg-muted rounded-lg p-4">
-                                            <p className="text-sm leading-relaxed">
-                                                {summaryData.summary}
-                                            </p>
+                                        <div className="bg-muted rounded-lg p-4 text-sm">
+                                            <RichMarkdown
+                                                content={summaryData.summary}
+                                            />
                                         </div>
 
                                         {/* Key points */}

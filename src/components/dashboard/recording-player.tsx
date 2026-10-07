@@ -12,6 +12,7 @@ import type { Recording } from "@/types/recording";
 interface RecordingPlayerProps {
     recording: Recording;
     onEnded?: () => void;
+    onRenamed?: (filename: string) => void;
     initialPlaybackSpeed?: number;
     initialVolume?: number;
     initialAutoPlayNext?: boolean;
@@ -38,6 +39,7 @@ interface RecordingPlayerProps {
 export function RecordingPlayer({
     recording,
     onEnded,
+    onRenamed,
     initialPlaybackSpeed = 1.0,
     initialVolume = 75,
     initialAutoPlayNext = false,
@@ -116,6 +118,7 @@ export function RecordingPlayer({
                 scrubberStyle={scrubberStyle}
                 waveformStatus={waveformStatus}
                 onDecodeWaveform={triggerWaveformDecode}
+                onRenamed={onRenamed}
             />
             <CardContent>
                 <RecordingPlayerControls

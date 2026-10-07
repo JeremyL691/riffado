@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { apiCredentials } from "@/db/schema";
 import { listUserProviders } from "@/lib/ai/list-providers";
+import { supportsEnhancement } from "@/lib/ai/provider-presets";
 import { setDefaultTranscriptionProvider } from "@/lib/ai/set-default-transcription";
 import { validateAiBaseUrl } from "@/lib/ai/validate-base-url";
 import { requireApiSession } from "@/lib/auth-server";
@@ -10,6 +11,7 @@ import { encrypt } from "@/lib/encryption";
 import { env } from "@/lib/env";
 import { AppError, apiHandler, ErrorCode } from "@/lib/errors";
 import { captureServerEvent } from "@/lib/posthog-server";
+import { validateElevenLabsBaseUrl } from "@/lib/transcription/elevenlabs-transcribe";
 
 // GET - List all AI providers for the user
 export const GET = apiHandler(async (request: Request) => {
@@ -41,6 +43,15 @@ export const POST = apiHandler(async (request: Request) => {
         );
     }
 
+    if (isDefaultEnhancement && !supportsEnhancement(provider)) {
+        throw new AppError(
+            ErrorCode.INVALID_INPUT,
+            `${provider} does not support AI enhancements (transcription only)`,
+            400,
+            { field: "isDefaultEnhancement" },
+        );
+    }
+
     // On hosted, the app process can't reach the user's machine — reject
     // localhost / loopback baseUrls (e.g. LM Studio, Ollama) with a clear
     // message. Self-host accepts everything.
@@ -51,6 +62,19 @@ export const POST = apiHandler(async (request: Request) => {
         throw new AppError(ErrorCode.INVALID_INPUT, baseUrlCheck.message, 400, {
             field: "baseUrl",
         });
+    }
+    if (provider === "ElevenLabs") {
+        const elevenLabsBaseUrlCheck = validateElevenLabsBaseUrl(baseUrl, {
+            isHosted: env.IS_HOSTED,
+        });
+        if (!elevenLabsBaseUrlCheck.ok) {
+            throw new AppError(
+                ErrorCode.INVALID_INPUT,
+                elevenLabsBaseUrlCheck.message,
+                400,
+                { field: "baseUrl" },
+            );
+        }
     }
 
     // Encrypt the API key

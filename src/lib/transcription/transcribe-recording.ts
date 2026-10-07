@@ -2,12 +2,13 @@ import { and, eq, isNull } from "drizzle-orm";
 import { OpenAI } from "openai";
 import { db } from "@/db";
 import {
+    aiEnhancements,
     apiCredentials,
     recordings,
     transcriptions,
     userSettings,
 } from "@/db/schema";
-import { getTranscriptionStyle } from "@/lib/ai/provider-presets";
+import { findPreset, getTranscriptionStyle } from "@/lib/ai/provider-presets";
 import { decrypt } from "@/lib/encryption";
 import { decryptText, encryptText } from "@/lib/encryption/fields";
 import { isHostedLockedOut } from "@/lib/entitlements";
@@ -20,11 +21,25 @@ import {
     captureServerEvent,
     captureServerException,
 } from "@/lib/posthog-server";
+import { consumeRateLimitBucket } from "@/lib/rate-limit";
+import {
+    DownloadSizeLimitError,
+    withDownloadedBlobWithLimit,
+} from "@/lib/storage/download-limited";
 import { createUserStorageProvider } from "@/lib/storage/factory";
-import { buildAudioFile } from "@/lib/transcription/audio-file";
+import { generateSummaryForRecording } from "@/lib/summary/generate-summary";
+import {
+    buildAudioFile,
+    getAudioFileMetadata,
+} from "@/lib/transcription/audio-file";
 import { queueAudioPipelineJob } from "@/lib/transcription/audio-pipeline";
 import { chatTranscribe } from "@/lib/transcription/chat-transcribe";
 import { maybeCompressForWhisper } from "@/lib/transcription/compress-audio";
+import {
+    ELEVENLABS_MAX_FILE_BYTES,
+    ElevenLabsFileTooLargeError,
+    elevenLabsTranscribe,
+} from "@/lib/transcription/elevenlabs-transcribe";
 import {
     buildTranscriptionParams,
     getResponseFormat,
@@ -32,6 +47,7 @@ import {
 } from "@/lib/transcription/format";
 import { geminiTranscribe } from "@/lib/transcription/gemini-transcribe";
 import { isRiffadoIncludedProviderId } from "@/lib/transcription/included-provider";
+import { transcribeOpenAIDiarized } from "@/lib/transcription/openai-diarized-transcribe";
 import { upsertTranscription } from "@/lib/transcription/persist";
 import { postProcessTranscription } from "@/lib/transcription/postprocess";
 import { emitEvent } from "@/lib/webhooks/emit";
@@ -48,6 +64,7 @@ export type TranscribeErrorCode =
     | "HOSTED_LOCKED_OUT"
     | "MYNAH_BUDGET_EXHAUSTED"
     | "AUDIO_TOO_LONG"
+    | "FILE_TOO_LARGE"
     | "TRANSCRIPTION_FAILED";
 
 export interface StoreBrowserTranscriptionInput {
@@ -229,7 +246,30 @@ export interface TranscribeResult {
     jobId?: string;
 }
 
+// Per-recording in-flight dedup within one process. Force and non-force
+// are partitioned so Retry cannot inherit an auto-transcribe skip.
+const inFlightTranscriptions = new Map<string, Promise<TranscribeResult>>();
+
 export async function transcribeRecording(
+    userId: string,
+    recordingId: string,
+    opts: TranscribeOptions = {},
+): Promise<TranscribeResult> {
+    const key = `${userId}:${recordingId}:${opts.force ? "force" : "auto"}`;
+    const inFlight = inFlightTranscriptions.get(key);
+    if (inFlight) {
+        return inFlight;
+    }
+    const work = transcribeRecordingInner(userId, recordingId, opts);
+    inFlightTranscriptions.set(key, work);
+    try {
+        return await work;
+    } finally {
+        inFlightTranscriptions.delete(key);
+    }
+}
+
+async function transcribeRecordingInner(
     userId: string,
     recordingId: string,
     opts: TranscribeOptions = {},
@@ -328,8 +368,12 @@ export async function transcribeRecording(
         const defaultLanguage =
             settings?.defaultTranscriptionLanguage || undefined;
         const quality = settings?.transcriptionQuality || "balanced";
+        const diarize = settings?.speakerDiarization ?? true;
+        const numSpeakers = settings?.diarizationSpeakerCount ?? undefined;
         const autoGenerateTitle = settings?.autoGenerateTitle ?? true;
         const syncTitleToPlaud = settings?.syncTitleToPlaud ?? false;
+        const autoSummarize = settings?.autoSummarize ?? false;
+        const autoSummarizePreset = settings?.autoSummarizePreset ?? null;
         const pointer = settings?.defaultTranscriptionProviderId ?? null;
         const requested = opts.providerId || pointer || null;
         const useManaged = isRiffadoIncludedProviderId(requested);
@@ -369,11 +413,12 @@ export async function transcribeRecording(
             };
         };
 
-        // Keep provider secrets and StorageProvider access in Core. The
-        // isolated sidecar receives only a job identity and asks authenticated
-        // internal bridge routes for the source stream and individual chunks.
-        // Browser transcription uses storeBrowserTranscription and never
-        // enters this server-side branch.
+        // Long-audio preprocessing (fork): keep provider secrets and
+        // StorageProvider access in Core. The isolated sidecar receives only
+        // a job identity and asks authenticated internal bridge routes for
+        // the source stream and individual chunks. Browser transcription
+        // uses storeBrowserTranscription and never enters this server-side
+        // branch.
         if (env.AUDIO_PIPELINE_ENABLED && !env.IS_HOSTED && credentials) {
             if ((recording.duration ?? 0) > 86_400_000) {
                 return {
@@ -382,7 +427,11 @@ export async function transcribeRecording(
                     errorCode: "AUDIO_TOO_LONG",
                 };
             }
-            const model = opts.model || credentials.defaultModel || "whisper-1";
+            const model =
+                opts.model ||
+                credentials.defaultModel ||
+                findPreset(credentials.provider)?.defaultModel ||
+                "whisper-1";
             const job = await queueAudioPipelineJob({
                 userId,
                 recordingId,
@@ -425,26 +474,10 @@ export async function transcribeRecording(
         } else if (credentials) {
             const apiKey = decrypt(credentials.apiKey);
 
-            const storage = await createUserStorageProvider(userId);
-            const audioBuffer = await storage.downloadFile(
-                recording.storagePath,
-            );
-
-            // `recording.filename` is encrypted at rest; decrypt before
-            // passing to the transcription provider as a filename hint.
-            const decryptedFilename = decryptText(recording.filename);
-            const { file: audioFile, contentType } = buildAudioFile(
-                audioBuffer,
-                recording.storagePath,
-                decryptedFilename,
-            );
-
-            const model = opts.model || credentials.defaultModel || "whisper-1";
-            persistProvider = credentials.provider;
-            persistModel = model;
-
             // Route based on the provider's transcription style:
             // - "gemini": Google Gemini native generateContent API (inlineData)
+            // - "elevenlabs": ElevenLabs Scribe /v1/speech-to-text (xi-api-key,
+            //   diarized words[] response)
             // - "chat": OpenAI-compatible chat completions with input_audio
             //   (OpenRouter today; #122 -- /v1/audio/transcriptions 404s there)
             // - "whisper": OpenAI-compatible /v1/audio/transcriptions
@@ -452,25 +485,72 @@ export async function transcribeRecording(
                 credentials.provider,
             );
 
-            if (transcriptionStyle === "gemini") {
-                const result = await geminiTranscribe({
-                    apiKey,
-                    model,
-                    audioBuffer,
-                    contentType,
-                    language: defaultLanguage,
-                });
-                transcriptionText = result.text;
-                detectedLanguage = result.detectedLanguage;
-            } else {
-                const openai = new OpenAI({
-                    apiKey,
-                    baseURL: credentials.baseUrl || undefined,
-                });
+            if (
+                transcriptionStyle === "elevenlabs" &&
+                recording.filesize > ELEVENLABS_MAX_FILE_BYTES
+            ) {
+                throw new ElevenLabsFileTooLargeError(recording.filesize);
+            }
 
-                if (transcriptionStyle === "chat") {
-                    const result = await chatTranscribe({
-                        client: openai,
+            const storage = await createUserStorageProvider(userId);
+            const decryptedFilename = decryptText(recording.filename);
+            const model =
+                opts.model ||
+                credentials.defaultModel ||
+                findPreset(credentials.provider)?.defaultModel ||
+                "whisper-1";
+            persistProvider = credentials.provider;
+            persistModel = model;
+
+            if (transcriptionStyle === "elevenlabs") {
+                try {
+                    const result = await withDownloadedBlobWithLimit(
+                        storage,
+                        recording.storagePath,
+                        ELEVENLABS_MAX_FILE_BYTES,
+                        async ({ blob, header }) => {
+                            const metadata = getAudioFileMetadata(
+                                header,
+                                recording.storagePath,
+                                decryptedFilename,
+                            );
+                            const file = new File([blob], metadata.filename, {
+                                type: metadata.contentType,
+                            });
+                            return elevenLabsTranscribe({
+                                apiKey,
+                                model,
+                                file,
+                                baseUrl: credentials.baseUrl,
+                                isHosted: env.IS_HOSTED,
+                                language: defaultLanguage,
+                                diarize,
+                                numSpeakers,
+                                timeoutMs: env.WHISPER_REQUEST_TIMEOUT_MS,
+                            });
+                        },
+                    );
+                    transcriptionText = result.text;
+                    detectedLanguage = result.detectedLanguage;
+                } catch (err) {
+                    if (err instanceof DownloadSizeLimitError) {
+                        throw new ElevenLabsFileTooLargeError();
+                    }
+                    throw err;
+                }
+            } else {
+                const audioBuffer = await storage.downloadFile(
+                    recording.storagePath,
+                );
+                const { file: audioFile, contentType } = buildAudioFile(
+                    audioBuffer,
+                    recording.storagePath,
+                    decryptedFilename,
+                );
+
+                if (transcriptionStyle === "gemini") {
+                    const result = await geminiTranscribe({
+                        apiKey,
                         model,
                         audioBuffer,
                         contentType,
@@ -479,45 +559,68 @@ export async function transcribeRecording(
                     transcriptionText = result.text;
                     detectedLanguage = result.detectedLanguage;
                 } else {
-                    const responseFormat = getResponseFormat(model);
+                    const openai = new OpenAI({
+                        apiKey,
+                        baseURL: credentials.baseUrl || undefined,
+                        timeout: env.WHISPER_REQUEST_TIMEOUT_MS,
+                    });
 
-                    // OpenAI's /v1/audio/transcriptions endpoint has a hard
-                    // 25 MiB per-request limit. For meeting-length recordings
-                    // that limit is the common case, not the edge case -- fall
-                    // back to a mono Opus re-encode so 3 h+ uploads don't get
-                    // rejected with a 413.
-                    const compressed = await maybeCompressForWhisper(
-                        audioBuffer,
-                        contentType,
-                    );
-                    const fileToSend = compressed.compressed
-                        ? buildAudioFile(
-                              compressed.buffer,
-                              recording.storagePath,
-                              decryptedFilename,
-                          ).file
-                        : audioFile;
+                    if (transcriptionStyle === "chat") {
+                        const result = await chatTranscribe({
+                            client: openai,
+                            model,
+                            audioBuffer,
+                            contentType,
+                            language: defaultLanguage,
+                        });
+                        transcriptionText = result.text;
+                        detectedLanguage = result.detectedLanguage;
+                    } else {
+                        const responseFormat = getResponseFormat(model);
 
-                    // Whisper-1 runs ~0.1-0.3x realtime, so a 3 h recording
-                    // can keep the request open 20-40 min. The SDK default
-                    // (10 min) times out long before that; override
-                    // per-request so other OpenAI calls keep the default.
-                    const transcription =
-                        await openai.audio.transcriptions.create(
-                            buildTranscriptionParams({
-                                file: fileToSend,
+                        if (responseFormat === "diarized_json") {
+                            const parsed = await transcribeOpenAIDiarized({
+                                client: openai,
                                 model,
-                                responseFormat,
+                                audioBuffer,
+                                durationMs: recording.duration,
+                                filename: decryptedFilename,
                                 language: defaultLanguage,
-                            }),
-                            { timeout: env.WHISPER_REQUEST_TIMEOUT_MS },
-                        );
-                    const parsed = parseTranscriptionResponse(
-                        transcription,
-                        responseFormat,
-                    );
-                    transcriptionText = parsed.text;
-                    detectedLanguage = parsed.detectedLanguage;
+                                timeoutMs: env.WHISPER_REQUEST_TIMEOUT_MS,
+                            });
+                            transcriptionText = parsed.text;
+                            detectedLanguage = parsed.detectedLanguage;
+                        } else {
+                            const compressed = await maybeCompressForWhisper(
+                                audioBuffer,
+                                contentType,
+                            );
+                            const fileToSend = compressed.compressed
+                                ? buildAudioFile(
+                                      compressed.buffer,
+                                      recording.storagePath,
+                                      decryptedFilename,
+                                  ).file
+                                : audioFile;
+
+                            const transcription =
+                                await openai.audio.transcriptions.create(
+                                    buildTranscriptionParams({
+                                        file: fileToSend,
+                                        model,
+                                        responseFormat,
+                                        language: defaultLanguage,
+                                    }),
+                                    { timeout: env.WHISPER_REQUEST_TIMEOUT_MS },
+                                );
+                            const parsed = parseTranscriptionResponse(
+                                transcription,
+                                responseFormat,
+                            );
+                            transcriptionText = parsed.text;
+                            detectedLanguage = parsed.detectedLanguage;
+                        }
+                    }
                 }
             }
         } else {
@@ -557,6 +660,23 @@ export async function transcribeRecording(
             };
         }
 
+        // Re-transcribe path: the previous transcript is being overwritten,
+        // so any existing summary now references stale source text. Drop it
+        // so readers never see "fresh transcript + old summary". If
+        // auto-summarize is on, a fresh summary is generated below;
+        // otherwise the recording shows no summary until the user clicks
+        // "Generate summary" manually.
+        if (existingTranscription?.text && opts.force) {
+            await db
+                .delete(aiEnhancements)
+                .where(
+                    and(
+                        eq(aiEnhancements.recordingId, recordingId),
+                        eq(aiEnhancements.userId, userId),
+                    ),
+                );
+        }
+
         await postProcessTranscription({
             userId,
             recordingId,
@@ -578,6 +698,54 @@ export async function transcribeRecording(
             },
         });
 
+        if (autoSummarize) {
+            // Per-user hourly cap on auto-summary calls. Cheap defense
+            // against runaway provider cost if a sync replays N
+            // recordings or the user toggles auto-summarize on with an
+            // expensive model. The manual "Generate summary" button is
+            // not throttled -- the user is in the loop there.
+            const rateLimit = await consumeRateLimitBucket(
+                `auto-summary:user:${userId}`,
+                {
+                    limit: env.AUTO_SUMMARY_RATE_LIMIT_PER_HOUR,
+                    windowMs: 60 * 60 * 1000,
+                },
+            );
+
+            if (!rateLimit.allowed) {
+                console.warn(
+                    `Auto-summary rate limit hit for user ${userId} (recording ${recordingId})`,
+                );
+                await emitEvent("summary.failed", userId, recordingId, {
+                    error: `Auto-summary rate limit exceeded (${env.AUTO_SUMMARY_RATE_LIMIT_PER_HOUR}/hour). Manual summary still works.`,
+                });
+            } else {
+                // Run summarization synchronously so the `summary.completed`
+                // event (and the underlying summary write) lands before
+                // downstream consumers that listen for it. A failure here
+                // must not roll back the transcript itself -- the user
+                // still wants the transcript even if the summary call dies.
+                try {
+                    await generateSummaryForRecording(userId, recordingId, {
+                        presetId: autoSummarizePreset ?? undefined,
+                        trigger: "auto",
+                    });
+                    await emitEvent("summary.completed", userId, recordingId);
+                } catch (error) {
+                    console.error(
+                        `Auto-summarize failed for recording ${recordingId}:`,
+                        error,
+                    );
+                    await emitEvent("summary.failed", userId, recordingId, {
+                        error:
+                            error instanceof Error
+                                ? error.message
+                                : String(error),
+                    });
+                }
+            }
+        }
+
         return {
             success: true,
             text: transcriptionText,
@@ -598,6 +766,16 @@ export async function transcribeRecording(
                 success: false,
                 error: "You've used all of your included Mynah transcription for this cycle. It resets next cycle, or add your own AI provider to keep transcribing.",
                 errorCode: "MYNAH_BUDGET_EXHAUSTED",
+            };
+        }
+        if (error instanceof ElevenLabsFileTooLargeError) {
+            await emitEvent("transcription.failed", userId, recordingId, {
+                error: error.message,
+            });
+            return {
+                success: false,
+                error: error.message,
+                errorCode: "FILE_TOO_LARGE",
             };
         }
         captureServerException(error, {

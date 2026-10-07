@@ -29,6 +29,11 @@ export const foundingMemberReservationStatusEnum = pgEnum(
     ["reserved", "consumed", "released", "expired"],
 );
 
+export const stripeWebhookEventStatusEnum = pgEnum(
+    "stripe_webhook_event_status",
+    ["pending", "processing", "completed", "failed"],
+);
+
 // Better Auth tables (handled by Better Auth)
 export const users = pgTable("users", {
     id: text("id")
@@ -490,6 +495,14 @@ export const userSettings = pgTable("user_settings", {
     syncInterval: integer("sync_interval").notNull().default(300000),
     // Auto-transcribe new recordings
     autoTranscribe: boolean("auto_transcribe").notNull().default(false),
+    // Auto-summarize after a successful transcription (manual, post-sync
+    // auto, or re-transcribe). Runs the same summary pipeline as the
+    // manual button. Orthogonal to autoTranscribe -- fires on any
+    // successful transcription, not just auto-transcribed ones.
+    autoSummarize: boolean("auto_summarize").notNull().default(false),
+    // Preset id override for the auto-summary path. Null inherits
+    // summaryPrompt.selectedPrompt (the manual default).
+    autoSummarizePreset: text("auto_summarize_preset"),
     // Sync settings
     autoSyncEnabled: boolean("auto_sync_enabled").notNull().default(true),
     syncOnMount: boolean("sync_on_mount").notNull().default(true),
@@ -515,6 +528,11 @@ export const userSettings = pgTable("user_settings", {
     transcriptionQuality: varchar("transcription_quality", { length: 20 })
         .notNull()
         .default("balanced"), // 'fast', 'balanced', 'accurate'
+    // Speaker diarization. Only providers with a diarizing surface honor
+    // this (ElevenLabs Scribe today); Whisper-style providers ignore it.
+    speakerDiarization: boolean("speaker_diarization").notNull().default(true),
+    // Optional speaker-count hint, 1..32. Null lets the provider decide.
+    diarizationSpeakerCount: integer("diarization_speaker_count"),
     // Plaud-native content import (feature #204). When enabled, sync imports
     // Plaud's own transcript/summary (source='plaud') for recordings Plaud
     // has already processed, instead of only the audio.
@@ -1020,11 +1038,33 @@ export const stripeWebhookEvents = pgTable(
     {
         eventId: text("event_id").primaryKey(),
         type: varchar("type", { length: 60 }).notNull(),
-        processedAt: timestamp("processed_at").notNull().defaultNow(),
+        eventCreatedAt: timestamp("event_created_at").notNull(),
+        payload: jsonb("payload")
+            .$type<Record<string, unknown>>()
+            .notNull()
+            .default({}),
+        // Existing claim-only rows predate the durable inbox and must remain
+        // completed on migration; new inbox inserts explicitly set pending.
+        status: stripeWebhookEventStatusEnum("status")
+            .notNull()
+            .default("completed"),
+        attempts: integer("attempts").notNull().default(0),
+        claimToken: text("claim_token"),
+        startedAt: timestamp("started_at"),
+        nextAttemptAt: timestamp("next_attempt_at").notNull().defaultNow(),
+        lastError: text("last_error"),
+        completedAt: timestamp("completed_at"),
+        failedAt: timestamp("failed_at"),
+        createdAt: timestamp("created_at").notNull().defaultNow(),
+        updatedAt: timestamp("updated_at").notNull().defaultNow(),
     },
     (table) => ({
-        processedAtIdx: index("stripe_webhook_events_processed_at_idx").on(
-            table.processedAt,
+        dueScanIdx: index("stripe_webhook_events_due_idx").on(
+            table.status,
+            table.nextAttemptAt,
+        ),
+        createdAtIdx: index("stripe_webhook_events_created_at_idx").on(
+            table.createdAt,
         ),
     }),
 );

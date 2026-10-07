@@ -1,6 +1,6 @@
 {
-  "id": "23748f4d-5e28-4ab9-a582-cccad9dabc15",
-  "prevId": "ff93dc06-f6b4-43ec-b504-c6dbd6873d2c",
+  "id": "eff627c9-f994-4dcd-8768-6902228b4d3c",
+  "prevId": "fefc5511-d9ed-47a3-b6ba-ea18202650da",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -723,294 +723,6 @@
         }
       },
       "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.audio_pipeline_jobs": {
-      "name": "audio_pipeline_jobs",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "recording_id": {
-          "name": "recording_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "generation": {
-          "name": "generation",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "provider_id": {
-          "name": "provider_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "provider": {
-          "name": "provider",
-          "type": "varchar(100)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "model": {
-          "name": "model",
-          "type": "varchar(100)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "language": {
-          "name": "language",
-          "type": "varchar(10)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "trigger": {
-          "name": "trigger",
-          "type": "varchar(16)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "duration_ms": {
-          "name": "duration_ms",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "varchar(24)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'queued'"
-        },
-        "phase": {
-          "name": "phase",
-          "type": "varchar(24)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'queued'"
-        },
-        "progress": {
-          "name": "progress",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "pipeline_job_id": {
-          "name": "pipeline_job_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "config_snapshot": {
-          "name": "config_snapshot",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "timestamp_source": {
-          "name": "timestamp_source",
-          "type": "varchar(10)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "error_type": {
-          "name": "error_type",
-          "type": "varchar(80)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "error_message": {
-          "name": "error_message",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "lease_token": {
-          "name": "lease_token",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "lease_until": {
-          "name": "lease_until",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "attempts": {
-          "name": "attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sidecar_acknowledged_at": {
-          "name": "sidecar_acknowledged_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "audio_pipeline_jobs_recording_generation_unique": {
-          "name": "audio_pipeline_jobs_recording_generation_unique",
-          "columns": [
-            {
-              "expression": "recording_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "generation",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "audio_pipeline_jobs_pending_idx": {
-          "name": "audio_pipeline_jobs_pending_idx",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "updated_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "audio_pipeline_jobs_sidecar_finalization_idx": {
-          "name": "audio_pipeline_jobs_sidecar_finalization_idx",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "sidecar_acknowledged_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "audio_pipeline_jobs_active_recording_unique": {
-          "name": "audio_pipeline_jobs_active_recording_unique",
-          "columns": [
-            {
-              "expression": "recording_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"audio_pipeline_jobs\".\"status\" IN ('queued', 'submitted', 'running', 'paused')",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "audio_pipeline_jobs_user_id_users_id_fk": {
-          "name": "audio_pipeline_jobs_user_id_users_id_fk",
-          "tableFrom": "audio_pipeline_jobs",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "audio_pipeline_jobs_recording_id_recordings_id_fk": {
-          "name": "audio_pipeline_jobs_recording_id_recordings_id_fk",
-          "tableFrom": "audio_pipeline_jobs",
-          "tableTo": "recordings",
-          "columnsFrom": [
-            "recording_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
@@ -2501,8 +2213,80 @@
           "primaryKey": false,
           "notNull": true
         },
-        "processed_at": {
-          "name": "processed_at",
+        "event_created_at": {
+          "name": "event_created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "status": {
+          "name": "status",
+          "type": "stripe_webhook_event_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'completed'"
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "claim_token": {
+          "name": "claim_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "failed_at": {
+          "name": "failed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": true,
@@ -2510,11 +2294,32 @@
         }
       },
       "indexes": {
-        "stripe_webhook_events_processed_at_idx": {
-          "name": "stripe_webhook_events_processed_at_idx",
+        "stripe_webhook_events_due_idx": {
+          "name": "stripe_webhook_events_due_idx",
           "columns": [
             {
-              "expression": "processed_at",
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "next_attempt_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "stripe_webhook_events_created_at_idx": {
+          "name": "stripe_webhook_events_created_at_idx",
+          "columns": [
+            {
+              "expression": "created_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -2755,18 +2560,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "timeline": {
-          "name": "timeline",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "timeline_source": {
-          "name": "timeline_source",
-          "type": "varchar(10)",
-          "primaryKey": false,
-          "notNull": false
-        },
         "source": {
           "name": "source",
           "type": "varchar(20)",
@@ -2887,6 +2680,19 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "auto_summarize": {
+          "name": "auto_summarize",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "auto_summarize_preset": {
+          "name": "auto_summarize_preset",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "auto_sync_enabled": {
           "name": "auto_sync_enabled",
@@ -3702,6 +3508,16 @@
         "consumed",
         "released",
         "expired"
+      ]
+    },
+    "public.stripe_webhook_event_status": {
+      "name": "stripe_webhook_event_status",
+      "schema": "public",
+      "values": [
+        "pending",
+        "processing",
+        "completed",
+        "failed"
       ]
     },
     "public.user_plan": {

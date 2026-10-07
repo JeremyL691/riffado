@@ -257,15 +257,36 @@
     {
       "idx": 36,
       "version": "7",
-      "when": 1791342416437,
-      "tag": "0036_puzzling_magus",
+      "when": 1785145753255,
+      "tag": "0036_wide_raider",
       "breakpoints": true
     },
     {
       "idx": 37,
       "version": "7",
+      "when": 1785230494218,
+      "tag": "0037_thankful_silver_samurai",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1789279683722,
+      "tag": "0038_secret_the_fallen",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1791342416437,
+      "tag": "0039_puzzling_magus",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
       "when": 1791343042356,
-      "tag": "0037_worried_lethal_legion",
+      "tag": "0040_worried_lethal_legion",
       "breakpoints": true
     }
   ]

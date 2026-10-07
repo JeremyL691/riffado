@@ -8,7 +8,7 @@ An independent, self-hosted fork of [Riffado](https://github.com/riffado/riffado
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![CI](https://github.com/JeremyL691/riffado/actions/workflows/ci.yml/badge.svg?branch=enhanced)](https://github.com/JeremyL691/riffado/actions/workflows/ci.yml)
-[![Upstream base](https://img.shields.io/badge/upstream-v0.6.4-informational.svg)](https://github.com/riffado/riffado/tree/v0.6.4)
+[![Upstream base](https://img.shields.io/badge/upstream-main%402026--10-informational.svg)](https://github.com/riffado/riffado/commit/b518379bded20af5e512d4db010be7da95a601a8)
 
 [Get started](#get-started) · [What changed](#what-changed) · [Processing guide](docs/audio-pipeline.md) · [Validation](docs/validation.md) · [Upstream](https://github.com/riffado/riffado)
 
@@ -24,7 +24,7 @@ Long recordings benefit from more than a larger upload limit. Processing should 
 
 ## What changed
 
-This branch builds on upstream **v0.6.4**. Later upstream changes are not automatically included. The comparison below describes the additions to that baseline, rather than claiming that upstream cannot process long recordings.
+This branch tracks upstream **main** (synced October 2026). Recent upstream capabilities — speaker diarization via ElevenLabs Scribe, automatic summaries, original-audio download, and long-recording timeout fixes — are included in this sync; the comparison below describes the fork's additions on top of that baseline.
 
 | Area | Inherited from Riffado | Added by this fork |
 | --- | --- | --- |
@@ -92,7 +92,7 @@ For storage, job controls, provider behavior, and upgrades, see the [processing 
 - Playback positioning requires valid segment timestamps from the configured model. Gemini and chat-style transcription currently save text without a timeline.
 - The default service budget is one recording job, two concurrent STT requests, two CPUs, and 2 GiB of RAM. Decoded 24-hour PCM needs about 2.76 GB of disk space, plus the source audio and temporary files.
 - The fork has not established comparative accuracy, latency, or provider-cost benchmarks. VAD and chunking add their own processing overhead.
-- Later upstream features, including ElevenLabs integration and subsequent fixes, need an explicit integration effort. Do not point a database migrated by later upstream versions at this older fork schema.
+- Upstream is synced through October 2026. Later upstream changes need a future sync, and databases should not be moved between this fork and upstream builds with different migration histories.
 
 ## Development and validation
 

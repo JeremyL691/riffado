@@ -25,6 +25,7 @@ import {
     findPreset,
     getVisiblePresets,
     isLocalPreset,
+    supportsEnhancement,
 } from "@/lib/ai/provider-presets";
 
 interface Provider {
@@ -81,7 +82,10 @@ export function EditProviderDialog({
             setBaseUrl(provider.baseUrl || "");
             setDefaultModel(provider.defaultModel || "");
             setIsDefaultTranscription(provider.isDefaultTranscription);
-            setIsDefaultEnhancement(provider.isDefaultEnhancement);
+            setIsDefaultEnhancement(
+                supportsEnhancement(provider.provider) &&
+                    provider.isDefaultEnhancement,
+            );
             setApiKey("");
         } else if (!open) {
             setProviderName("");
@@ -307,10 +311,18 @@ export function EditProviderDialog({
                                 onChange={(e) =>
                                     setIsDefaultEnhancement(e.target.checked)
                                 }
-                                disabled={isLoading}
+                                disabled={
+                                    isLoading ||
+                                    !supportsEnhancement(provider.provider)
+                                }
                             />
                             <span>Use for AI enhancements</span>
                         </label>
+                        {!supportsEnhancement(provider.provider) && (
+                            <p className="text-xs text-muted-foreground pl-6">
+                                {provider.provider} transcribes only.
+                            </p>
+                        )}
                     </Panel>
 
                     <div className="flex gap-2">

@@ -78,6 +78,8 @@ function mapErrorCodeToAppError(
             return new AppError(ErrorCode.MYNAH_BUDGET_EXHAUSTED, msg, 402);
         case "AUDIO_TOO_LONG":
             return new AppError(ErrorCode.TRANSCRIPTION_FAILED, msg, 413);
+        case "FILE_TOO_LARGE":
+            return new AppError(ErrorCode.FILE_TOO_LARGE, msg, 413);
         default:
             return new AppError(ErrorCode.TRANSCRIPTION_FAILED, msg, 500);
     }
