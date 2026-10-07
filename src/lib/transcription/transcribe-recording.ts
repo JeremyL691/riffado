@@ -3,12 +3,10 @@ import { OpenAI } from "openai";
 import { db } from "@/db";
 import {
     apiCredentials,
-    plaudConnections,
     recordings,
     transcriptions,
     userSettings,
 } from "@/db/schema";
-import { generateTitleFromTranscription } from "@/lib/ai/generate-title";
 import { getTranscriptionStyle } from "@/lib/ai/provider-presets";
 import { decrypt } from "@/lib/encryption";
 import { decryptText, encryptText } from "@/lib/encryption/fields";
@@ -18,13 +16,13 @@ import {
     isMynahConfigured,
     transcribeViaMynah,
 } from "@/lib/hosted/transcription/mynah";
-import { createPlaudClient } from "@/lib/plaud/client-factory";
 import {
     captureServerEvent,
     captureServerException,
 } from "@/lib/posthog-server";
 import { createUserStorageProvider } from "@/lib/storage/factory";
 import { buildAudioFile } from "@/lib/transcription/audio-file";
+import { queueAudioPipelineJob } from "@/lib/transcription/audio-pipeline";
 import { chatTranscribe } from "@/lib/transcription/chat-transcribe";
 import { maybeCompressForWhisper } from "@/lib/transcription/compress-audio";
 import {
@@ -35,6 +33,7 @@ import {
 import { geminiTranscribe } from "@/lib/transcription/gemini-transcribe";
 import { isRiffadoIncludedProviderId } from "@/lib/transcription/included-provider";
 import { upsertTranscription } from "@/lib/transcription/persist";
+import { postProcessTranscription } from "@/lib/transcription/postprocess";
 import { emitEvent } from "@/lib/webhooks/emit";
 
 /**
@@ -48,6 +47,7 @@ export type TranscribeErrorCode =
     | "RECORDING_DELETED"
     | "HOSTED_LOCKED_OUT"
     | "MYNAH_BUDGET_EXHAUSTED"
+    | "AUDIO_TOO_LONG"
     | "TRANSCRIPTION_FAILED";
 
 export interface StoreBrowserTranscriptionInput {
@@ -224,6 +224,9 @@ export interface TranscribeResult {
     text?: string;
     /** Present on success when the provider returned a language. */
     detectedLanguage?: string | null;
+    /** True when a durable asynchronous transcription job was accepted. */
+    pending?: boolean;
+    jobId?: string;
 }
 
 export async function transcribeRecording(
@@ -365,6 +368,41 @@ export async function transcribeRecording(
                 model: "parakeet",
             };
         };
+
+        // Keep provider secrets and StorageProvider access in Core. The
+        // isolated sidecar receives only a job identity and asks authenticated
+        // internal bridge routes for the source stream and individual chunks.
+        // Browser transcription uses storeBrowserTranscription and never
+        // enters this server-side branch.
+        if (env.AUDIO_PIPELINE_ENABLED && !env.IS_HOSTED && credentials) {
+            if ((recording.duration ?? 0) > 86_400_000) {
+                return {
+                    success: false,
+                    error: "Audio preprocessing supports recordings up to 24 hours",
+                    errorCode: "AUDIO_TOO_LONG",
+                };
+            }
+            const model = opts.model || credentials.defaultModel || "whisper-1";
+            const job = await queueAudioPipelineJob({
+                userId,
+                recordingId,
+                durationMs: recording.duration ?? 0,
+                providerId: credentials.id,
+                provider: credentials.provider,
+                model,
+                language: defaultLanguage,
+                trigger: opts.trigger ?? "manual",
+                force: opts.force ?? false,
+            });
+            if (!job) {
+                return {
+                    success: false,
+                    error: "Recording was deleted before transcription started",
+                    errorCode: "RECORDING_DELETED",
+                };
+            }
+            return { success: true, pending: true, jobId: job.jobId };
+        }
 
         let transcriptionText: string;
         let detectedLanguage: string | null;
@@ -519,86 +557,14 @@ export async function transcribeRecording(
             };
         }
 
-        if (autoGenerateTitle && transcriptionText.trim()) {
-            try {
-                const generatedTitle = await generateTitleFromTranscription(
-                    userId,
-                    transcriptionText,
-                );
-
-                if (generatedTitle) {
-                    // Encrypt the generated title before storing it as the
-                    // recording's filename. The plaintext is still available
-                    // below for the optional sync-to-Plaud push.
-                    await db
-                        .update(recordings)
-                        .set({
-                            filename: encryptText(generatedTitle),
-                            updatedAt: new Date(),
-                        })
-                        .where(
-                            and(
-                                eq(recordings.id, recordingId),
-                                eq(recordings.userId, userId),
-                                isNull(recordings.deletedAt),
-                            ),
-                        );
-
-                    if (syncTitleToPlaud) {
-                        try {
-                            const [connection] = await db
-                                .select()
-                                .from(plaudConnections)
-                                .where(eq(plaudConnections.userId, userId))
-                                .limit(1);
-
-                            if (connection) {
-                                const plaudClient = await createPlaudClient(
-                                    connection.bearerToken,
-                                    connection.apiBase,
-                                    connection.workspaceId,
-                                );
-                                await plaudClient.updateFilename(
-                                    recording.plaudFileId,
-                                    generatedTitle,
-                                );
-                                // Backfill workspaceId if newly resolved.
-                                // Always scope user-owned UPDATEs by userId
-                                // even when filtering by id (per AGENTS.md).
-                                const resolved = plaudClient.workspaceId;
-                                if (
-                                    resolved &&
-                                    resolved !== connection.workspaceId
-                                ) {
-                                    await db
-                                        .update(plaudConnections)
-                                        .set({ workspaceId: resolved })
-                                        .where(
-                                            and(
-                                                eq(
-                                                    plaudConnections.id,
-                                                    connection.id,
-                                                ),
-                                                eq(
-                                                    plaudConnections.userId,
-                                                    userId,
-                                                ),
-                                            ),
-                                        );
-                                }
-                            }
-                        } catch (error) {
-                            console.error(
-                                "Failed to sync title to Plaud:",
-                                error,
-                            );
-                        }
-                    }
-                }
-            } catch (error) {
-                console.error("Failed to generate title:", error);
-            }
-        }
+        await postProcessTranscription({
+            userId,
+            recordingId,
+            text: transcriptionText,
+            plaudFileId: recording.plaudFileId,
+            autoGenerateTitle,
+            syncTitleToPlaud,
+        });
 
         await emitEvent("transcription.completed", userId, recordingId);
         await captureServerEvent({

@@ -1,114 +1,129 @@
-<div align="center">
-
 ![Riffado](.github/assets/banner.png)
 
-**Open-source AI transcription companion for voice recorders.**
+# Riffado Long Audio
 
-*Bring your own AI provider, own your transcripts, self-host or hosted.*
+**Resume long transcriptions. Jump from words to the original recording.**
+
+An independent, self-hosted fork of [Riffado](https://github.com/riffado/riffado), focused on long meetings, lectures, and interviews. Local speech detection and durable processing jobs extend the original transcription workspace.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://riffado.com/discord)
+[![CI](https://github.com/JeremyL691/riffado/actions/workflows/ci.yml/badge.svg?branch=enhanced)](https://github.com/JeremyL691/riffado/actions/workflows/ci.yml)
+[![Upstream base](https://img.shields.io/badge/upstream-v0.6.4-informational.svg)](https://github.com/riffado/riffado/tree/v0.6.4)
 
-[Quick start](#quick-start) • [Documentation](https://riffado.com/docs) • [Discord](https://riffado.com/discord)
+[Get started](#get-started) · [What changed](#what-changed) · [Processing guide](docs/audio-pipeline.md) · [Validation](docs/validation.md) · [Upstream](https://github.com/riffado/riffado)
 
-</div>
+## Why this fork
 
----
+Long recordings benefit from more than a larger upload limit. Processing should survive an interruption, preserve the original audio clock, and make the finished transcript useful for review.
 
-> **OpenPlaud is now Riffado.** Same project, same code, same team, same license &mdash; renamed in May 2026 so the project isn't tied to one device vendor in its name. [Read the rebrand note &rarr;](https://riffado.com/rebrand)
+- **Process speech, skip long silences.** Silero VAD runs locally. Short pauses remain in the audio, and chunks prefer natural pauses near two minutes.
+- **Continue after interruptions.** Jobs, VAD checkpoints, and completed chunk results persist on disk. Failed chunks can be retried without discarding successful work.
+- **Listen from the transcript.** Click a timestamped segment to seek the original recording. The current segment is highlighted during playback.
+- **Keep timing honest.** Native provider timestamps are validated and restored to the source recording clock. Missing or invalid timestamps produce a saved transcript with `needs_alignment`, rather than estimated positions.
+- **Take the timeline with you.** Full-data archives include a versioned `timeline.json` with segment timing, timestamp provenance, and processing configuration.
 
-Riffado is an open-source companion app for AI voice recorders. It syncs your recordings from the manufacturer's cloud, transcribes them with any OpenAI-compatible API (or in the browser, for free), and stores everything on infrastructure you control. **Currently supports the Plaud Note family — Note, Note Pro, and NotePin. More device support on the way.** AGPL-3.0.
+## What changed
 
-## Features
+This branch builds on upstream **v0.6.4**. Later upstream changes are not automatically included. The comparison below describes the additions to that baseline, rather than claiming that upstream cannot process long recordings.
 
-- Self-hosted. Your recordings, your storage, your API keys.
-- Works with any OpenAI-compatible provider — OpenAI, Groq, OpenRouter, Together, LM Studio, Ollama, Azure, anything with a `baseURL`.
-- Free browser transcription via Transformers.js (Whisper in WebAssembly).
-- Local filesystem or S3-compatible storage (AWS S3, Cloudflare R2, MinIO, Backblaze B2, DigitalOcean Spaces, Wasabi).
-- AES-256-GCM encryption at rest for tokens, API keys, transcripts, and summaries.
-- Auto-sync on a schedule, with browser and email notifications.
-- Full export and backup — JSON, TXT, SRT, VTT, plus one-archive backup/restore.
-- Automation API with signed webhooks for integrations.
-- Zero-config Docker Compose deploy.
+| Area | Inherited from Riffado | Added by this fork |
+| --- | --- | --- |
+| Recordings | Plaud sync, original audio storage and playback | Local VAD and continuous, non-overlapping speech chunks |
+| Transcription | User-configured providers and browser Whisper | Durable server jobs with chunk-level persistence and retries |
+| Playback | Recording player and transcript views | Click-to-seek segments and active-segment highlighting |
+| Progress | Existing transcription controls | Processing phases, progress, cancellation, retry, and disk-space pause/recovery |
+| Timing | Provider-dependent transcription output | Structured absolute timestamps with strict validation |
+| Export | Transcript formats and full-data archives | `timeline.json` alongside the transcript and processing metadata |
 
-## Quick start
+Plaud connection, summaries, title generation, local/S3 storage, encrypted Core data, and automation APIs come from the original project. Browser transcription continues to use its existing path.
 
-You need Docker, a Plaud account at [plaud.ai](https://plaud.ai), and (optionally) an OpenAI-compatible API key.
+## How it works
 
-**One-liner (Linux / macOS):**
-
-```bash
-curl -fsSL https://riffado.com/install.sh | sh
+```mermaid
+flowchart LR
+    A[Original recording] --> B[Local decode and speech detection]
+    B --> C[Continuous speech chunks]
+    C --> D[Configured transcription provider via Core]
+    D --> E[Validate and restore source timestamps]
+    E --> F[Transcript and timeline]
+    F --> G[Original-audio playback]
+    C --> H[Durable chunk checkpoints]
+    H --> C
 ```
 
-Prompts for an install directory and `APP_URL`, downloads `docker-compose.yml` and `.env`, generates secrets, starts the stack, and waits for `/api/health`. Source: [`scripts/install.sh`](scripts/install.sh).
+The private Python service handles preprocessing and checkpoint state. Riffado Core owns storage access and AI credentials, makes provider requests, and encrypts the persisted transcript and timeline. The service is reachable only inside the Compose network.
 
-**Manual install:**
+## Get started
 
-```bash
-mkdir riffado && cd riffado
-curl -fLO https://github.com/riffado/riffado/releases/latest/download/docker-compose.yml
-curl -fL  https://github.com/riffado/riffado/releases/latest/download/env.example -o .env
+Requirements: Docker with Compose, a Plaud account, and a server transcription provider configured in Riffado. The bundled preprocessing model runs locally; speech recognition runs at the provider you select.
 
-# Generate secrets, paste into .env
-echo "BETTER_AUTH_SECRET=$(openssl rand -hex 32)"
-echo "ENCRYPTION_KEY=$(openssl rand -hex 32)"
-
-docker compose up -d
+```sh
+git clone --branch enhanced https://github.com/JeremyL691/riffado.git
+cd riffado
+cp .env.example .env
 ```
 
-Open <http://localhost:3000/register> and create your account. The onboarding wizard handles Plaud connection, AI providers, storage, and sync preferences.
+Edit `.env` and set these values. Generate a different random value for each secret using `openssl rand -hex 32`:
 
-**Upgrade:** `docker compose pull && docker compose up -d`. Migrations run on container start.
+| Variable | Value |
+| --- | --- |
+| `POSTGRES_PASSWORD` | A random hex password |
+| `BETTER_AUTH_SECRET` | A separate random secret |
+| `ENCRYPTION_KEY` | A separate 64-character hex key |
+| `AUDIO_PIPELINE_TOKEN` | A separate random secret, at least 32 characters |
+| `APP_URL` | `http://localhost:3000` for a local installation |
 
-Full install guide, version pinning, image tags, and Windows/WSL notes: [riffado.com/docs/self-hosting/install](https://riffado.com/docs/self-hosting/install).
+Build and start the enhanced stack:
 
-> `main` is a rolling integration branch. Deploy from tagged image releases, not by building `main`. See [BRANCHING.md](BRANCHING.md).
+```sh
+docker compose -f docker-compose.yml -f docker-compose.enhanced.yml up -d --build
+```
 
-## Connecting Plaud
+Open [localhost:3000/register](http://localhost:3000/register), create an account, connect Plaud, and select a server transcription provider in settings. Start a transcription from the dashboard to use the pipeline.
 
-Riffado signs into Plaud using your email — the same OTP flow as the official app. The verification code is forwarded directly to Plaud and never stored. Your access token is encrypted with AES-256-GCM before hitting the database. Region (Global, EU, APAC) is auto-detected.
+The enhanced Compose overlay builds this fork locally and enables preprocessing. The upstream one-line installer and upstream published images install the original project and do not include these enhancements. No prebuilt enhanced image is published by this repository yet.
 
-If you signed up to Plaud with **Continue with Google** or **Continue with Apple**, the email-code flow won't return any recordings — that's a different identity on Plaud's side. Use the [Riffado Connector browser extension](https://github.com/riffado/connector), or paste a token manually. Full instructions: [riffado.com/docs/guides/connect-plaud-account](https://riffado.com/docs/guides/connect-plaud-account).
+For storage, job controls, provider behavior, and upgrades, see the [processing guide](docs/audio-pipeline.md).
 
-> Every line that handles your credentials is open source — [send-code route](src/app/api/plaud/auth/send-code/route.ts) · [verify route](src/app/api/plaud/auth/verify/route.ts) · [encryption](src/lib/encryption.ts).
+## Scope and current limits
 
-## Documentation
+- The pipeline is for self-hosted server transcription. Hosted mode and browser transcription use the original paths.
+- The implementation accepts recordings up to 24 hours. That is an enforced limit, not a claim of a completed 24-hour endurance test.
+- Playback positioning requires valid segment timestamps from the configured model. Gemini and chat-style transcription currently save text without a timeline.
+- The default service budget is one recording job, two concurrent STT requests, two CPUs, and 2 GiB of RAM. Decoded 24-hour PCM needs about 2.76 GB of disk space, plus the source audio and temporary files.
+- The fork has not established comparative accuracy, latency, or provider-cost benchmarks. VAD and chunking add their own processing overhead.
+- Later upstream features, including ElevenLabs integration and subsequent fixes, need an explicit integration effort. Do not point a database migrated by later upstream versions at this older fork schema.
 
-Everything lives at **[riffado.com/docs](https://riffado.com/docs)**. Direct links:
+## Development and validation
 
-- [Install & first run](https://riffado.com/docs/self-hosting/install)
-- [Environment variables](https://riffado.com/docs/self-hosting/environment-variables)
-- [Upgrading](https://riffado.com/docs/self-hosting/upgrading)
-- [S3-compatible storage](https://riffado.com/docs/self-hosting/storage-s3)
-- [Email / SMTP](https://riffado.com/docs/self-hosting/email-smtp)
-- [Connect your Plaud account](https://riffado.com/docs/guides/connect-plaud-account)
-- [AI providers](https://riffado.com/docs/guides/ai-providers)
-- [Backup & restore](https://riffado.com/docs/guides/backup-and-restore)
-- [Notifications](https://riffado.com/docs/guides/notifications)
-- [Automation & webhooks](https://riffado.com/docs/guides/automation-and-webhooks)
-- [Public API reference](https://riffado.com/docs/reference/public-api)
-- [Encryption at rest](https://riffado.com/docs/reference/encryption-at-rest)
-- [Security model](https://riffado.com/docs/reference/security-model)
-- [Architecture](https://riffado.com/docs/reference/architecture)
+```sh
+pnpm install --frozen-lockfile
+pnpm format-and-lint
+pnpm type-check
+pnpm test
 
-## Contributing
+cd audio-pipeline
+uv run --frozen --group dev ruff check src tests
+uv run --frozen --group dev ruff format --check src tests
+uv run --frozen --group dev pytest
+```
 
-Bug reports, feature requests, and PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup and the PR workflow, [BRANCHING.md](BRANCHING.md) for the release model, and [CHANGELOG.md](CHANGELOG.md) for version history.
+Python 3.12 is used for the pipeline. See [validation scope](docs/validation.md) for the checks performed and the external checks that remain unverified.
 
-## Security
+Automated regression tests and synthetic fixtures are part of the source. Personal recordings, real credentials, local databases, environments, caches, and processing workspaces are excluded. Keep your `.env` private.
 
-Found a vulnerability? See [SECURITY.md](SECURITY.md) for disclosure.
+## Documentation and support
 
-## License
+- [Audio preprocessing and deployment](docs/audio-pipeline.md)
+- [Local validation and limitations](docs/validation.md)
+- [Original Riffado documentation](https://riffado.com/docs)
+- [Report a fork-specific issue](https://github.com/JeremyL691/riffado/issues)
+- [Original project and contributors](https://github.com/riffado/riffado)
 
-AGPL-3.0 — see [LICENSE](LICENSE). Free to use, modify, and self-host. If you run a modified version as a network service, you must publish your source.
+## License and acknowledgments
 
-## Disclaimer
+AGPL-3.0. See [LICENSE](LICENSE). This fork retains the original project's license and history. The bundled Silero VAD model includes its [upstream license](audio-pipeline/models/SILERO_LICENSE.txt).
 
-- **Not affiliated.** Riffado is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Plaud Inc. or any of its subsidiaries. "Plaud" and related marks are the property of their respective owners and are used here only for descriptive interoperability purposes (nominative fair use).
-- **Third-party devices and services.** Riffado is designed to interoperate with hardware and services from third parties that users choose to connect — including recording devices (such as Plaud) and storage and AI providers. Users are solely responsible for complying with the applicable terms of service, acceptable-use policies, and laws governing any third-party device or service they connect to this software.
+Riffado was originally created by **Perier** and is maintained by the Riffado community. The Riffado name and banner identify the upstream project. Long-audio enhancements are maintained independently in this fork.
 
-## Acknowledgments
-
-Originally created by **Perier**. Maintained by the Riffado community.
+Riffado and this fork are independent of Plaud Inc. and are not endorsed by Plaud. Device and service names are used to describe interoperability.

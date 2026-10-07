@@ -48,6 +48,7 @@ export default async function DashboardPage() {
                 recordingId: transcriptions.recordingId,
                 text: transcriptions.text,
                 language: transcriptions.detectedLanguage,
+                source: transcriptions.source,
             })
             .from(transcriptions)
             .where(eq(transcriptions.userId, session.user.id)),
@@ -98,12 +99,19 @@ export default async function DashboardPage() {
         ),
     );
 
-    const transcriptionMap = new Map(
-        userTranscriptions.map((t) => [
-            t.recordingId,
-            { text: decryptText(t.text), language: t.language || undefined },
-        ]),
-    );
+    const transcriptionMap = new Map<
+        string,
+        { text: string; language?: string }
+    >();
+    for (const transcription of userTranscriptions) {
+        const existing = transcriptionMap.get(transcription.recordingId);
+        if (!existing || transcription.source === "riffado") {
+            transcriptionMap.set(transcription.recordingId, {
+                text: decryptText(transcription.text),
+                language: transcription.language || undefined,
+            });
+        }
+    }
 
     // One source of truth for InitialSettings + their defaults lives in
     // `src/lib/settings/initial-settings.ts`; adding a new preference

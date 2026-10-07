@@ -176,6 +176,27 @@ const baseEnvSchema = z.object({
         .transform((val) => (val ? Number(val) : 60 * 60 * 1000))
         .pipe(z.number().int().positive()),
 
+    /** Opt-in long-audio preprocessing for new server-side transcriptions. */
+    AUDIO_PIPELINE_ENABLED: optionalStrictBoolean.transform(
+        (value) => value ?? false,
+    ),
+    AUDIO_PIPELINE_BASE_URL: z
+        .string()
+        .optional()
+        .transform((value) =>
+            value && value.trim() !== ""
+                ? value.trim().replace(/\/+$/, "")
+                : "http://audio-pipeline:8100",
+        )
+        .pipe(z.string().url("AUDIO_PIPELINE_BASE_URL must be a valid URL")),
+    AUDIO_PIPELINE_TOKEN: z
+        .string()
+        .optional()
+        .transform((value) => (value === "" ? undefined : value))
+        .refine((value) => value === undefined || value.length >= 32, {
+            message: "AUDIO_PIPELINE_TOKEN must be at least 32 characters",
+        }),
+
     SMTP_HOST: z.string().optional(),
     SMTP_PORT: z
         .string()
@@ -748,6 +769,9 @@ function validateEnv(): Env {
             WHISPER_COMPRESS_BITRATE_KBPS:
                 process.env.WHISPER_COMPRESS_BITRATE_KBPS,
             WHISPER_REQUEST_TIMEOUT_MS: process.env.WHISPER_REQUEST_TIMEOUT_MS,
+            AUDIO_PIPELINE_ENABLED: process.env.AUDIO_PIPELINE_ENABLED,
+            AUDIO_PIPELINE_BASE_URL: process.env.AUDIO_PIPELINE_BASE_URL,
+            AUDIO_PIPELINE_TOKEN: process.env.AUDIO_PIPELINE_TOKEN,
             SMTP_HOST: process.env.SMTP_HOST,
             SMTP_PORT: process.env.SMTP_PORT,
             SMTP_SECURE: process.env.SMTP_SECURE,
@@ -873,6 +897,17 @@ function validateEnv(): Env {
             if (parsed.BILLING_ENABLED && !parsed.MYNAH_SERVICE_TOKEN) {
                 throw new Error(
                     "BILLING_ENABLED=true requires MYNAH_SERVICE_TOKEN to be set",
+                );
+            }
+
+            if (parsed.AUDIO_PIPELINE_ENABLED && parsed.IS_HOSTED) {
+                throw new Error(
+                    "AUDIO_PIPELINE_ENABLED is available only for self-hosted deployments",
+                );
+            }
+            if (parsed.AUDIO_PIPELINE_ENABLED && !parsed.AUDIO_PIPELINE_TOKEN) {
+                throw new Error(
+                    "AUDIO_PIPELINE_ENABLED=true requires AUDIO_PIPELINE_TOKEN",
                 );
             }
 

@@ -54,3 +54,21 @@ next-env.d.ts
 
 # README
 README.md
+
+# Local processing state and Python development artifacts
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+.codegraph
+.worktrees
+storage
+audio-pipeline/data
+audio-pipeline/jobs
+Test audio
+test-audio
+docker-compose.local.yml
+docker-compose.override.yml
+.env.*

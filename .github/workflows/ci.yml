@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - enhanced
   pull_request:
 
 concurrency:
@@ -11,6 +12,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  audio-pipeline:
+    name: Audio Pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.23'
+          python-version: '3.12'
+      - name: Check Python code
+        working-directory: audio-pipeline
+        run: |
+          uv run --frozen --group dev ruff check src tests
+          uv run --frozen --group dev ruff format --check src tests
+      - name: Run pipeline tests
+        working-directory: audio-pipeline
+        run: uv run --frozen --group dev pytest
+
   lint:
     name: Lint & Format
     runs-on: ubuntu-latest

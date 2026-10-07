@@ -54,7 +54,11 @@ export function useTranscribeQueue({ onTranscribeComplete }: Options) {
                     { method: "POST" },
                 );
                 if (response.ok) {
-                    toast.success("Transcription complete");
+                    if (response.status === 202) {
+                        toast.success("Transcription queued");
+                    } else {
+                        toast.success("Transcription complete");
+                    }
                     onTranscribeComplete();
                 } else {
                     const error = await response.json();

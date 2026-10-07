@@ -14,6 +14,10 @@ type ExportWorkerModule = {
     startExportWorker: () => void;
 };
 
+type AudioPipelineWorkerModule = {
+    startAudioPipelineWorker: () => void;
+};
+
 type EnvModule = {
     env: {
         IS_HOSTED: boolean;
@@ -74,6 +78,10 @@ export async function register() {
     const { startExportWorker } =
         require("./lib/export/worker") as ExportWorkerModule;
     startExportWorker();
+
+    const { startAudioPipelineWorker } =
+        require("./lib/transcription/audio-pipeline") as AudioPipelineWorkerModule;
+    startAudioPipelineWorker();
 
     // Catch anything that escapes a background worker's own try/catch (or
     // any other unexpected process-level throw) instead of only ever

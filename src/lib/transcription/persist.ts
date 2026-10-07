@@ -25,6 +25,9 @@ export interface UpsertTranscriptionArgs {
     source: TranscriptSource;
     provider: string;
     model: string;
+    /** Absolute source timestamps, encrypted independently at rest. */
+    timeline?: unknown[] | null;
+    timelineSource?: "native" | "aligned" | null;
     /** Where it ran. Defaults to "server"; unrelated to `source`. */
     transcriptionType?: "server" | "browser";
 }
@@ -76,6 +79,8 @@ export async function upsertTranscription(
         provider,
         model,
         transcriptionType = "server",
+        timeline = null,
+        timelineSource = null,
     } = args;
 
     try {
@@ -109,6 +114,7 @@ export async function upsertTranscription(
                 .limit(1);
 
             const encryptedText = encryptText(text);
+            const encryptedTimeline = encryptJsonField(timeline);
 
             if (current) {
                 await tx
@@ -120,6 +126,8 @@ export async function upsertTranscription(
                         provider,
                         model,
                         source,
+                        timeline: encryptedTimeline,
+                        timelineSource,
                     })
                     .where(
                         and(
@@ -137,6 +145,8 @@ export async function upsertTranscription(
                     provider,
                     model,
                     source,
+                    timeline: encryptedTimeline,
+                    timelineSource,
                 });
             }
 

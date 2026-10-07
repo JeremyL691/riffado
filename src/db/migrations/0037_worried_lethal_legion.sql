@@ -1,0 +1,2 @@
+ALTER TABLE "audio_pipeline_jobs" ADD COLUMN "sidecar_acknowledged_at" timestamp;--> statement-breakpoint
+CREATE INDEX "audio_pipeline_jobs_sidecar_finalization_idx" ON "audio_pipeline_jobs" USING btree ("status","sidecar_acknowledged_at");

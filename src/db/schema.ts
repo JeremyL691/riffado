@@ -338,6 +338,10 @@ export const transcriptions = pgTable(
             .default("server"), // 'server' or 'browser'
         provider: varchar("provider", { length: 100 }).notNull(), // e.g., 'openai', 'groq', 'browser'
         model: varchar("model", { length: 100 }).notNull(), // e.g., 'whisper-1', 'whisper-large-v3-turbo', 'whisper-base'
+        // Encrypted, versioned absolute source timeline from Audio Pipeline.
+        // Legacy and browser transcripts keep this nullable.
+        timeline: jsonb("timeline"),
+        timelineSource: varchar("timeline_source", { length: 10 }), // native | aligned
         // Provenance of this transcript, orthogonal to transcriptionType:
         //   'riffado' = produced by the user's own provider (server/browser)
         //   'plaud'   = imported from Plaud's native transcription
@@ -358,6 +362,63 @@ export const transcriptions = pgTable(
         recordingUserSourceUnique: unique(
             "transcriptions_recording_user_source_unique",
         ).on(table.recordingId, table.userId, table.source),
+    }),
+);
+
+/** Durable association between a Riffado transcript run and the private pipeline. */
+export const audioPipelineJobs = pgTable(
+    "audio_pipeline_jobs",
+    {
+        id: text("id")
+            .primaryKey()
+            .$defaultFn(() => nanoid()),
+        userId: text("user_id")
+            .notNull()
+            .references(() => users.id, { onDelete: "cascade" }),
+        recordingId: text("recording_id")
+            .notNull()
+            .references(() => recordings.id, { onDelete: "cascade" }),
+        generation: integer("generation").notNull(),
+        providerId: text("provider_id"),
+        provider: varchar("provider", { length: 100 }).notNull(),
+        model: varchar("model", { length: 100 }).notNull(),
+        language: varchar("language", { length: 10 }),
+        trigger: varchar("trigger", { length: 16 }).notNull(),
+        durationMs: bigint("duration_ms", { mode: "number" }).notNull(),
+        status: varchar("status", { length: 24 }).notNull().default("queued"),
+        phase: varchar("phase", { length: 24 }).notNull().default("queued"),
+        progress: real("progress").notNull().default(0),
+        pipelineJobId: text("pipeline_job_id"),
+        configSnapshot: jsonb("config_snapshot").notNull(),
+        timestampSource: varchar("timestamp_source", { length: 10 }),
+        errorType: varchar("error_type", { length: 80 }),
+        errorMessage: text("error_message"),
+        leaseToken: text("lease_token"),
+        leaseUntil: timestamp("lease_until"),
+        attempts: integer("attempts").notNull().default(0),
+        createdAt: timestamp("created_at").notNull().defaultNow(),
+        updatedAt: timestamp("updated_at").notNull().defaultNow(),
+        completedAt: timestamp("completed_at"),
+        sidecarAcknowledgedAt: timestamp("sidecar_acknowledged_at"),
+    },
+    (table) => ({
+        recordingGenerationUnique: uniqueIndex(
+            "audio_pipeline_jobs_recording_generation_unique",
+        ).on(table.recordingId, table.userId, table.generation),
+        pendingScanIdx: index("audio_pipeline_jobs_pending_idx").on(
+            table.status,
+            table.updatedAt,
+        ),
+        sidecarFinalizationIdx: index(
+            "audio_pipeline_jobs_sidecar_finalization_idx",
+        ).on(table.status, table.sidecarAcknowledgedAt),
+        activeRecordingUnique: uniqueIndex(
+            "audio_pipeline_jobs_active_recording_unique",
+        )
+            .on(table.recordingId, table.userId)
+            .where(
+                sql`${table.status} IN ('queued', 'submitted', 'running', 'paused')`,
+            ),
     }),
 );
 

@@ -9,7 +9,7 @@ WORKDIR /app
 # only `package.json` + the lockfile are. We regenerate fumadocs sources
 # explicitly in the builder stage below, where the full tree is available.
 FROM base AS deps
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN bun install --frozen-lockfile --ignore-scripts
 
 # Build Next.js

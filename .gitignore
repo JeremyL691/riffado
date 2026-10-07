@@ -56,3 +56,40 @@ plans/
 # bun (we use pnpm; bun is only a runtime for scripts/tests)
 bun.lock
 /src/.source
+
+# Python environments and generated test artifacts
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage*
+
+# Local configuration, recordings, and processing state
+.env.*
+!.env.example
+!.env.*.example
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.wav
+*.mp3
+*.m4a
+*.ogg
+*.opus
+*.flac
+*.webm
+/Test audio/
+/test-audio/
+/audio-pipeline/data/
+/audio-pipeline/jobs/
+docker-compose.local.yml
+docker-compose.override.yml
+.codegraph/
+.worktrees/

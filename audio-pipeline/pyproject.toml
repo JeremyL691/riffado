@@ -1,0 +1,46 @@
+[project]
+name = "audio-pipeline"
+version = "0.1.0"
+description = "Long-audio preprocessing for Riffado: Silero VAD, smart chunking, pluggable STT, timestamp-preserving merge."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "numpy>=1.26",
+    "onnxruntime>=1.18",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+audio-pipeline = "audio_pipeline.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/audio_pipeline"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

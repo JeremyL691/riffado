@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowLeft } from "lucide-react";
+import { useRef, useState } from "react";
 import { RecordingPlayer } from "@/components/dashboard/recording-player";
 import { TranscriptionPanel } from "@/components/dashboard/transcription-panel";
 import { Button } from "@/components/ui/button";
@@ -56,6 +57,10 @@ export function WorkstationDetailPane({
     initialAutoPlayNext,
     scrubberStyle,
 }: Props) {
+    const seekToMillisecondsRef = useRef<(milliseconds: number) => void>(
+        () => {},
+    );
+    const [playbackTimeMs, setPlaybackTimeMs] = useState(0);
     return (
         <div
             className={cn(
@@ -86,6 +91,10 @@ export function WorkstationDetailPane({
                         initialVolume={initialVolume}
                         initialAutoPlayNext={initialAutoPlayNext}
                         scrubberStyle={scrubberStyle}
+                        onRegisterSeek={(seek) => {
+                            seekToMillisecondsRef.current = seek;
+                        }}
+                        onPlaybackTimeChange={setPlaybackTimeMs}
                         onEnded={() => {
                             const currentIndex = visibleRecordings.findIndex(
                                 (r) => r.id === currentRecording.id,
@@ -106,6 +115,10 @@ export function WorkstationDetailPane({
                         isTranscribing={isCurrentTranscribing}
                         onTranscribe={onTranscribe}
                         onTranscribeComplete={onTranscribeComplete}
+                        onSeekTimestamp={(milliseconds) =>
+                            seekToMillisecondsRef.current(milliseconds)
+                        }
+                        playbackTimeMs={playbackTimeMs}
                     />
                 </>
             ) : (

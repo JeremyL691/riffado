@@ -10,11 +10,14 @@ vi.mock("@/db/schema", () => ({
     recordings: "recordings",
     transcriptions: "transcriptions",
     aiEnhancements: "aiEnhancements",
+    audioPipelineJobs: "audioPipelineJobs",
 }));
 vi.mock("@/lib/encryption/fields", () => ({
     decryptText: (v: string | null) => (v == null ? v : `decrypted:${v}`),
     decryptJsonField: (v: unknown) =>
-        Array.isArray(v) ? v.map((x) => `decrypted:${x}`) : v,
+        Array.isArray(v) && v.every((x) => typeof x === "string")
+            ? v.map((x) => `decrypted:${x}`)
+            : v,
 }));
 
 type Row = Record<string, unknown>;
@@ -146,6 +149,22 @@ describe("buildAndUploadExportArchive", () => {
                 {
                     recordingId: "rec-1",
                     text: "enc-transcript",
+                    source: "riffado",
+                    timeline: [
+                        { start_ms: 1250, end_ms: 2300, text: "hello there" },
+                    ],
+                    timelineSource: "native",
+                },
+            ],
+            [
+                {
+                    recordingId: "rec-1",
+                    status: "completed",
+                    generation: 1,
+                    configSnapshot: {
+                        vad: { threshold: 0.5 },
+                        chunking: { target_seconds: 120 },
+                    },
                 },
             ],
             [
@@ -176,6 +195,7 @@ describe("buildAndUploadExportArchive", () => {
         expect(names).toContain("manifest.json");
         expect(names.some((n) => n.endsWith("/audio.mp3"))).toBe(true);
         expect(names.some((n) => n.endsWith("/transcript.txt"))).toBe(true);
+        expect(names.some((n) => n.endsWith("/timeline.json"))).toBe(true);
         expect(names.some((n) => n.endsWith("/summary.json"))).toBe(true);
 
         const manifest = JSON.parse(
@@ -184,6 +204,7 @@ describe("buildAndUploadExportArchive", () => {
         expect(manifest.recordings).toHaveLength(1);
         expect(manifest.recordings[0].audio.included).toBe(true);
         expect(manifest.recordings[0].transcript.included).toBe(true);
+        expect(manifest.recordings[0].timeline.included).toBe(true);
         expect(manifest.recordings[0].summary.included).toBe(true);
         expect(manifest.recordings[0].filename).toBe("decrypted:enc-filename");
 
@@ -207,6 +228,21 @@ describe("buildAndUploadExportArchive", () => {
         expect(summaryJson.summary).toBe("decrypted:A concise summary");
         expect(summaryJson.actionItems).toEqual(["decrypted:do a thing"]);
         expect(summaryJson.keyPoints).toEqual(["decrypted:key point"]);
+
+        const timelineEntry = [...entries.entries()].find(([n]) =>
+            n.endsWith("/timeline.json"),
+        );
+        expect(
+            JSON.parse(timelineEntry?.[1].buffer.toString("utf-8") ?? "{}"),
+        ).toEqual({
+            schema_version: 1,
+            timestamp_source: "native",
+            processing: {
+                vad: { threshold: 0.5 },
+                chunking: { target_seconds: 120 },
+            },
+            segments: [{ start_ms: 1250, end_ms: 2300, text: "hello there" }],
+        });
 
         // Audio is already-compressed media -- deflating it again wastes
         // CPU for no size benefit, so it should be stored (method 0), not

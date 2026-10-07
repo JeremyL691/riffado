@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { RecordingPlayerControls } from "@/components/dashboard/recording-player-controls";
 import { RecordingPlayerHeader } from "@/components/dashboard/recording-player-header";
 import { Card, CardContent } from "@/components/ui/card";
@@ -21,6 +22,10 @@ interface RecordingPlayerProps {
      * slider otherwise. Read from userSettings.playerScrubber.
      */
     scrubberStyle?: "waveform" | "slider";
+    onRegisterSeek?: (
+        seekToMilliseconds: (milliseconds: number) => void,
+    ) => void;
+    onPlaybackTimeChange?: (milliseconds: number) => void;
 }
 
 /**
@@ -37,6 +42,8 @@ export function RecordingPlayer({
     initialVolume = 75,
     initialAutoPlayNext = false,
     scrubberStyle = "waveform",
+    onRegisterSeek,
+    onPlaybackTimeChange,
 }: RecordingPlayerProps) {
     const {
         audioRef,
@@ -58,6 +65,22 @@ export function RecordingPlayer({
         initialVolume,
         initialAutoPlayNext,
     });
+
+    useEffect(() => {
+        if (!onRegisterSeek) return;
+        onRegisterSeek((milliseconds) => {
+            const audio = audioRef.current;
+            if (!audio || !Number.isFinite(milliseconds)) return;
+            const targetSeconds = Math.max(0, milliseconds / 1000);
+            audio.currentTime = Number.isFinite(audio.duration)
+                ? Math.min(targetSeconds, audio.duration)
+                : targetSeconds;
+        });
+    }, [audioRef, onRegisterSeek]);
+
+    useEffect(() => {
+        onPlaybackTimeChange?.(currentTime * 1000);
+    }, [currentTime, onPlaybackTimeChange]);
 
     usePlaybackKeyboard({
         onToggle: togglePlayPause,

@@ -253,6 +253,20 @@
       "when": 1784656848456,
       "tag": "0035_peaceful_hairball",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1791342416437,
+      "tag": "0036_puzzling_magus",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1791343042356,
+      "tag": "0037_worried_lethal_legion",
+      "breakpoints": true
     }
   ]
 }

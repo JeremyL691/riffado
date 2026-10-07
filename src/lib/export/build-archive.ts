@@ -2,7 +2,12 @@ import { PassThrough, type Readable } from "node:stream";
 import { ZipArchive } from "archiver";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { aiEnhancements, recordings, transcriptions } from "@/db/schema";
+import {
+    aiEnhancements,
+    audioPipelineJobs,
+    recordings,
+    transcriptions,
+} from "@/db/schema";
 import { decryptJsonField, decryptText } from "@/lib/encryption/fields";
 import type { StorageProvider } from "@/lib/storage/types";
 
@@ -21,6 +26,7 @@ interface ManifestRecording {
     deviceSn: string;
     audio: { included: boolean; path: string | null; reason?: string };
     transcript: { included: boolean; path: string | null };
+    timeline: { included: boolean; path: string | null };
     summary: { included: boolean; path: string | null };
 }
 
@@ -84,6 +90,32 @@ export async function buildAndUploadExportArchive(input: {
             : [];
     const transcriptionMap = new Map(
         userTranscriptions.map((t) => [t.recordingId, decryptText(t.text)]),
+    );
+    const timelineMap = new Map(
+        userTranscriptions
+            .filter((t) => t.source === "riffado" && t.timeline)
+            .map((t) => [
+                t.recordingId,
+                {
+                    segments: decryptJsonField<unknown[]>(t.timeline) ?? [],
+                    timestampSource: t.timelineSource,
+                },
+            ]),
+    );
+    const pipelineJobRows =
+        recordingIds.length > 0
+            ? await db
+                  .select()
+                  .from(audioPipelineJobs)
+                  .where(eq(audioPipelineJobs.userId, userId))
+            : [];
+    const pipelineConfigMap = new Map(
+        pipelineJobRows
+            .filter((job) =>
+                ["completed", "needs_alignment"].includes(job.status),
+            )
+            .sort((left, right) => left.generation - right.generation)
+            .map((job) => [job.recordingId, job.configSnapshot]),
     );
 
     const userEnhancements =
@@ -200,6 +232,7 @@ export async function buildAndUploadExportArchive(input: {
             deviceSn: recording.deviceSn,
             audio: { included: false, path: null },
             transcript: { included: false, path: null },
+            timeline: { included: false, path: null },
             summary: { included: false, path: null },
         };
 
@@ -281,6 +314,28 @@ export async function buildAndUploadExportArchive(input: {
                 name: transcriptPath,
             });
             entry.transcript = { included: true, path: transcriptPath };
+        }
+
+        const timeline = timelineMap.get(recording.id);
+        if (timeline) {
+            const timelinePath = `${folder}/timeline.json`;
+            archive.append(
+                Buffer.from(
+                    JSON.stringify(
+                        {
+                            schema_version: 1,
+                            timestamp_source: timeline.timestampSource,
+                            processing:
+                                pipelineConfigMap.get(recording.id) ?? null,
+                            segments: timeline.segments,
+                        },
+                        null,
+                        2,
+                    ),
+                ),
+                { name: timelinePath },
+            );
+            entry.timeline = { included: true, path: timelinePath };
         }
 
         const enhancement = enhancementMap.get(recording.id);

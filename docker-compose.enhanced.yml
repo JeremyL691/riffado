@@ -1,0 +1,21 @@
+# Build the fork from source instead of pulling an unmodified upstream image.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.enhanced.yml up -d --build
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+
+  app:
+    image: riffado-long-audio:local
+    pull_policy: never
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/riffado
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET in .env}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env}
+      AUDIO_PIPELINE_ENABLED: "true"
+      AUDIO_PIPELINE_TOKEN: ${AUDIO_PIPELINE_TOKEN:?Set AUDIO_PIPELINE_TOKEN in .env}
+      DISABLE_UPDATE_CHECK: "true"
+
+  audio-pipeline:
+    environment:
+      AUDIO_PIPELINE_TOKEN: ${AUDIO_PIPELINE_TOKEN:?Set AUDIO_PIPELINE_TOKEN in .env}

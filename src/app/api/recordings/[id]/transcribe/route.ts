@@ -47,6 +47,13 @@ export const POST = apiHandler<IdContext>(async (request, context) => {
         throw mapErrorCodeToAppError(result.errorCode, result.error);
     }
 
+    if (result.pending && result.jobId) {
+        return NextResponse.json(
+            { jobId: result.jobId, status: "queued" },
+            { status: 202 },
+        );
+    }
+
     return NextResponse.json({
         transcription: result.text ?? "",
         detectedLanguage: result.detectedLanguage ?? null,
@@ -69,6 +76,8 @@ function mapErrorCodeToAppError(
             return new AppError(ErrorCode.ACCOUNT_LOCKED, msg, 403);
         case "MYNAH_BUDGET_EXHAUSTED":
             return new AppError(ErrorCode.MYNAH_BUDGET_EXHAUSTED, msg, 402);
+        case "AUDIO_TOO_LONG":
+            return new AppError(ErrorCode.TRANSCRIPTION_FAILED, msg, 413);
         default:
             return new AppError(ErrorCode.TRANSCRIPTION_FAILED, msg, 500);
     }

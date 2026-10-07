@@ -11,7 +11,8 @@ import {
     Sparkles,
     Trash2,
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { TranscribeInBrowserButton } from "@/components/dashboard/transcribe-in-browser-button";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,6 +52,29 @@ interface TranscriptionPanelProps {
     onTranscribe: () => void;
     /** Refresh handler called after a browser-side transcription completes. */
     onTranscribeComplete?: () => void;
+    onSeekTimestamp?: (milliseconds: number) => void;
+    playbackTimeMs?: number;
+}
+
+interface TimelineSegment {
+    start_ms: number;
+    end_ms: number;
+    text: string;
+}
+
+interface PipelineState {
+    job: {
+        id: string;
+        status: string;
+        phase: string;
+        progress: number;
+        errorType: string | null;
+        error: string | null;
+        updatedAt: string;
+    } | null;
+    timeline: TimelineSegment[] | null;
+    timestampSource: string | null;
+    transcription: { text: string; language?: string; source: string } | null;
 }
 
 function transcriptSourceLabel(source: string): string {
@@ -66,8 +90,14 @@ export function TranscriptionPanel({
     isTranscribing,
     onTranscribe,
     onTranscribeComplete,
+    onSeekTimestamp,
+    playbackTimeMs,
 }: TranscriptionPanelProps) {
-    const transcriptList: TranscriptOption[] =
+    const [pipelineState, setPipelineState] = useState<PipelineState | null>(
+        null,
+    );
+    const observedActiveJobs = useRef(new Set<string>());
+    const suppliedTranscriptList: TranscriptOption[] =
         transcripts && transcripts.length > 0
             ? transcripts
             : transcription?.text
@@ -79,6 +109,17 @@ export function TranscriptionPanel({
                     },
                 ]
               : [];
+    const pipelineTranscriptReady = ["completed", "needs_alignment"].includes(
+        pipelineState?.job?.status ?? "",
+    )
+        ? (pipelineState?.transcription ?? null)
+        : null;
+    const transcriptList: TranscriptOption[] = pipelineTranscriptReady
+        ? [
+              ...suppliedTranscriptList.filter((t) => t.source !== "riffado"),
+              pipelineTranscriptReady,
+          ]
+        : suppliedTranscriptList;
 
     const [activeSource, setActiveSource] = useState<string | undefined>(
         undefined,
@@ -86,6 +127,130 @@ export function TranscriptionPanel({
     const activeTranscript =
         transcriptList.find((t) => t.source === activeSource) ??
         transcriptList[0];
+    const [pipelineBusy, setPipelineBusy] = useState(false);
+
+    useEffect(() => {
+        if (pipelineTranscriptReady?.text.trim()) {
+            setActiveSource((current) => current ?? "riffado");
+        }
+    }, [pipelineTranscriptReady?.text]);
+
+    const refreshPipelineState = useCallback(
+        async (signal?: AbortSignal): Promise<PipelineState | null> => {
+            try {
+                const response = await fetch(
+                    `/api/recordings/${recording.id}/audio-pipeline`,
+                    { signal },
+                );
+                if (!response.ok) return null;
+                const state = (await response.json()) as PipelineState;
+                setPipelineState(state);
+                return state;
+            } catch {
+                return null;
+            }
+        },
+        [recording.id],
+    );
+
+    useEffect(() => {
+        const controller = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let active = true;
+        const poll = async () => {
+            const state = await refreshPipelineState(controller.signal);
+            if (!active || controller.signal.aborted) return;
+            const job = state?.job;
+            if (
+                job &&
+                ["queued", "submitted", "running", "paused"].includes(
+                    job.status,
+                )
+            ) {
+                observedActiveJobs.current.add(job.id);
+            }
+            if (
+                job &&
+                [
+                    "completed",
+                    "needs_alignment",
+                    "failed",
+                    "cancelled",
+                ].includes(job.status)
+            ) {
+                const wasActive = observedActiveJobs.current.delete(job.id);
+                if (
+                    wasActive &&
+                    ["completed", "needs_alignment"].includes(job.status)
+                ) {
+                    if (state?.transcription?.text.trim())
+                        setActiveSource("riffado");
+                    onTranscribeComplete?.();
+                }
+            }
+            timer = setTimeout(
+                poll,
+                job &&
+                    ["queued", "submitted", "running", "paused"].includes(
+                        job.status,
+                    )
+                    ? 2_000
+                    : isTranscribing
+                      ? 500
+                      : 5_000,
+            );
+        };
+        void poll();
+        return () => {
+            active = false;
+            controller.abort();
+            if (timer) clearTimeout(timer);
+        };
+    }, [refreshPipelineState, isTranscribing, onTranscribeComplete]);
+
+    const activeJob = pipelineState?.job;
+    const isPipelineRunning =
+        activeJob &&
+        ["queued", "submitted", "running"].includes(activeJob.status);
+    const isPipelineActive =
+        isPipelineRunning || activeJob?.status === "paused";
+    const timeline =
+        activeTranscript?.source === "riffado" ? pipelineState?.timeline : null;
+
+    const performPipelineAction = async (action: "retry" | "cancel") => {
+        if (pipelineBusy) return;
+        setPipelineBusy(true);
+        try {
+            const response = await fetch(
+                `/api/recordings/${recording.id}/audio-pipeline`,
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action }),
+                },
+            );
+            if (!response.ok) {
+                toast.error(
+                    action === "retry"
+                        ? "Could not retry transcription"
+                        : "Could not cancel transcription",
+                );
+                return;
+            }
+            toast.success(
+                action === "retry" ? "Retry queued" : "Transcription cancelled",
+            );
+            await refreshPipelineState();
+        } catch {
+            toast.error(
+                action === "retry"
+                    ? "Could not retry transcription"
+                    : "Could not cancel transcription",
+            );
+        } finally {
+            setPipelineBusy(false);
+        }
+    };
 
     const {
         summaryData,
@@ -117,7 +282,10 @@ export function TranscriptionPanel({
                                     onClick={onTranscribe}
                                     size="sm"
                                     variant="outline"
-                                    disabled={isTranscribing}
+                                    disabled={
+                                        isTranscribing ||
+                                        Boolean(isPipelineActive)
+                                    }
                                 >
                                     <RefreshCw className="size-4 mr-2" />
                                     Re-transcribe
@@ -128,7 +296,10 @@ export function TranscriptionPanel({
                                     <Button
                                         onClick={onTranscribe}
                                         size="sm"
-                                        disabled={isTranscribing}
+                                        disabled={
+                                            isTranscribing ||
+                                            Boolean(isPipelineActive)
+                                        }
                                     >
                                         <Sparkles className="size-4 mr-2" />
                                         Transcribe
@@ -154,7 +325,7 @@ export function TranscriptionPanel({
                     </div>
                 </CardHeader>
                 <CardContent>
-                    {isTranscribing ? (
+                    {isTranscribing && !activeTranscript?.text ? (
                         <div className="flex flex-col items-center justify-center py-12">
                             <div className="animate-spin size-8 border-2 border-primary border-t-transparent rounded-full mb-4" />
                             <p className="text-sm text-muted-foreground">
@@ -163,6 +334,110 @@ export function TranscriptionPanel({
                         </div>
                     ) : activeTranscript?.text ? (
                         <div className="space-y-4">
+                            {isTranscribing || isPipelineRunning ? (
+                                <div
+                                    className="space-y-2 rounded-md border p-3"
+                                    aria-live="polite"
+                                >
+                                    <div className="flex items-center justify-between gap-3">
+                                        <p className="text-sm font-medium">
+                                            {isTranscribing
+                                                ? "Queueing transcription…"
+                                                : pipelinePhaseLabel(
+                                                      activeJob?.phase ??
+                                                          "queued",
+                                                  )}
+                                        </p>
+                                        {isPipelineRunning && (
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                disabled={pipelineBusy}
+                                                onClick={() =>
+                                                    void performPipelineAction(
+                                                        "cancel",
+                                                    )
+                                                }
+                                            >
+                                                Cancel
+                                            </Button>
+                                        )}
+                                    </div>
+                                    {isPipelineRunning && (
+                                        <progress
+                                            className="h-2 w-full accent-primary"
+                                            max={1}
+                                            value={Math.max(
+                                                0,
+                                                Math.min(
+                                                    1,
+                                                    activeJob?.progress ?? 0,
+                                                ),
+                                            )}
+                                            aria-label="Audio preprocessing progress"
+                                        />
+                                    )}
+                                </div>
+                            ) : null}
+                            {activeJob?.status === "failed" && (
+                                <div
+                                    className="flex flex-col gap-3 rounded-md border border-destructive/40 p-3 sm:flex-row sm:items-center sm:justify-between"
+                                    role="alert"
+                                >
+                                    <div>
+                                        <p className="text-sm font-medium">
+                                            Transcription failed
+                                        </p>
+                                        {activeJob.error && (
+                                            <p className="text-sm text-muted-foreground">
+                                                {activeJob.error}
+                                            </p>
+                                        )}
+                                    </div>
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={pipelineBusy}
+                                        onClick={() =>
+                                            void performPipelineAction("retry")
+                                        }
+                                    >
+                                        Retry
+                                    </Button>
+                                </div>
+                            )}
+                            {activeJob?.status === "needs_alignment" && (
+                                <p
+                                    className="rounded-md border p-3 text-sm"
+                                    aria-live="polite"
+                                >
+                                    Transcript saved. The provider returned no
+                                    validated timestamps, so playback
+                                    positioning is unavailable.
+                                </p>
+                            )}
+                            {activeJob?.status === "paused" && (
+                                <div
+                                    className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
+                                    aria-live="polite"
+                                >
+                                    <p className="text-sm">
+                                        Paused because the pipeline needs more
+                                        disk space. It will resume automatically
+                                        when space is available.
+                                    </p>
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={pipelineBusy}
+                                        onClick={() =>
+                                            void performPipelineAction("cancel")
+                                        }
+                                    >
+                                        Cancel
+                                    </Button>
+                                </div>
+                            )}
                             {transcriptList.length > 1 && (
                                 <div className="flex items-center gap-2 border-b pb-2">
                                     {transcriptList.map((t) => (
@@ -185,9 +460,51 @@ export function TranscriptionPanel({
                                 </div>
                             )}
                             <div className="bg-muted rounded-lg p-4 max-h-96 overflow-y-auto">
-                                <p className="text-sm whitespace-pre-wrap leading-relaxed">
-                                    {activeTranscript.text}
-                                </p>
+                                {timeline?.length ? (
+                                    <ol className="space-y-1">
+                                        {timeline.map((segment, index) => {
+                                            const isActive =
+                                                playbackTimeMs !== undefined &&
+                                                playbackTimeMs >=
+                                                    segment.start_ms &&
+                                                playbackTimeMs < segment.end_ms;
+                                            return (
+                                                <li
+                                                    key={`${segment.start_ms}-${index}`}
+                                                >
+                                                    <button
+                                                        type="button"
+                                                        disabled={
+                                                            !onSeekTimestamp
+                                                        }
+                                                        aria-current={
+                                                            isActive
+                                                                ? "time"
+                                                                : undefined
+                                                        }
+                                                        onClick={() =>
+                                                            onSeekTimestamp?.(
+                                                                segment.start_ms,
+                                                            )
+                                                        }
+                                                        className={`w-full rounded px-2 py-1 text-left text-sm leading-relaxed hover:bg-background/70 disabled:cursor-default ${isActive ? "bg-background font-medium" : ""}`}
+                                                    >
+                                                        <span className="mr-2 font-mono text-xs text-muted-foreground">
+                                                            {formatTimestamp(
+                                                                segment.start_ms,
+                                                            )}
+                                                        </span>
+                                                        {segment.text}
+                                                    </button>
+                                                </li>
+                                            );
+                                        })}
+                                    </ol>
+                                ) : (
+                                    <p className="text-sm whitespace-pre-wrap leading-relaxed">
+                                        {activeTranscript.text}
+                                    </p>
+                                )}
                             </div>
                             <div className="flex items-center gap-4 text-xs text-muted-foreground pt-2 border-t">
                                 <span className="px-2 py-0.5 rounded bg-muted font-medium">
@@ -219,11 +536,92 @@ export function TranscriptionPanel({
                         </div>
                     ) : (
                         <div className="flex flex-col items-center justify-center py-10 text-center">
-                            <FileText className="size-10 text-muted-foreground mb-3" />
-                            <p className="text-sm text-muted-foreground">
-                                No transcription yet. Use the Transcribe button
-                                above.
-                            </p>
+                            {isPipelineRunning ? (
+                                <div className="w-full max-w-md space-y-3 rounded-md border p-4 text-left">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <p className="text-sm font-medium">
+                                            {pipelinePhaseLabel(
+                                                activeJob?.phase ?? "queued",
+                                            )}
+                                        </p>
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={pipelineBusy}
+                                            onClick={() =>
+                                                void performPipelineAction(
+                                                    "cancel",
+                                                )
+                                            }
+                                        >
+                                            Cancel
+                                        </Button>
+                                    </div>
+                                    <progress
+                                        className="h-2 w-full accent-primary"
+                                        max={1}
+                                        value={Math.max(
+                                            0,
+                                            Math.min(
+                                                1,
+                                                activeJob?.progress ?? 0,
+                                            ),
+                                        )}
+                                        aria-label="Audio preprocessing progress"
+                                    />
+                                </div>
+                            ) : activeJob?.status === "paused" ? (
+                                <div
+                                    className="flex flex-col gap-3 rounded-md border p-4 text-left sm:flex-row sm:items-center sm:justify-between"
+                                    aria-live="polite"
+                                >
+                                    <p className="text-sm">
+                                        Paused because the pipeline needs more
+                                        disk space. It will resume automatically
+                                        when space is available.
+                                    </p>
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={pipelineBusy}
+                                        onClick={() =>
+                                            void performPipelineAction("cancel")
+                                        }
+                                    >
+                                        Cancel
+                                    </Button>
+                                </div>
+                            ) : activeJob?.status === "failed" ? (
+                                <div className="space-y-3" role="alert">
+                                    <FileText className="mx-auto size-10 text-muted-foreground" />
+                                    <p className="text-sm font-medium">
+                                        Transcription failed
+                                    </p>
+                                    {activeJob.error && (
+                                        <p className="text-sm text-muted-foreground">
+                                            {activeJob.error}
+                                        </p>
+                                    )}
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={pipelineBusy}
+                                        onClick={() =>
+                                            void performPipelineAction("retry")
+                                        }
+                                    >
+                                        Retry
+                                    </Button>
+                                </div>
+                            ) : (
+                                <>
+                                    <FileText className="size-10 text-muted-foreground mb-3" />
+                                    <p className="text-sm text-muted-foreground">
+                                        No transcription yet. Use the Transcribe
+                                        button above.
+                                    </p>
+                                </>
+                            )}
                         </div>
                     )}
                 </CardContent>
@@ -424,4 +822,29 @@ export function TranscriptionPanel({
             )}
         </div>
     );
+}
+
+function formatTimestamp(milliseconds: number): string {
+    const totalSeconds = Math.floor(milliseconds / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function pipelinePhaseLabel(phase: string): string {
+    const labels: Record<string, string> = {
+        queued: "Waiting to process audio",
+        download: "Reading original audio",
+        decode: "Preparing audio",
+        vad: "Detecting speech",
+        chunking: "Preparing speech segments",
+        transcribing: "Transcribing speech",
+        completed: "Transcription complete",
+        needs_alignment: "Transcript saved without timestamps",
+        paused_disk: "Paused for disk space",
+        failed: "Transcription failed",
+        cancelled: "Transcription cancelled",
+    };
+    return labels[phase] ?? "Processing transcription";
 }
