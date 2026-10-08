@@ -14,6 +14,7 @@ import type { StorageProvider } from "@/lib/storage/types";
 export interface ArchiveResult {
     recordingCount: number;
     fileSize: number;
+    missingAudioCount: number;
 }
 
 interface ManifestRecording {
@@ -199,11 +200,15 @@ export async function buildAndUploadExportArchive(input: {
         version: string;
         createdAt: string;
         userId: string;
+        audio_complete: boolean;
+        missing_audio_count: number;
         recordings: ManifestRecording[];
     } = {
         version: "2.0",
         createdAt: new Date().toISOString(),
         userId,
+        audio_complete: true,
+        missing_audio_count: 0,
         recordings: [],
     };
 
@@ -409,6 +414,12 @@ export async function buildAndUploadExportArchive(input: {
         );
     });
 
+    const missingAudioCount = manifest.recordings.filter(
+        (recording) => !recording.audio.included,
+    ).length;
+    manifest.audio_complete = missingAudioCount === 0;
+    manifest.missing_audio_count = missingAudioCount;
+
     archive.append(Buffer.from(JSON.stringify(manifest, null, 2)), {
         name: "manifest.json",
     });
@@ -420,5 +431,9 @@ export async function buildAndUploadExportArchive(input: {
         signal?.removeEventListener("abort", onAbort);
     }
 
-    return { recordingCount: userRecordings.length, fileSize };
+    return {
+        recordingCount: userRecordings.length,
+        fileSize,
+        missingAudioCount,
+    };
 }

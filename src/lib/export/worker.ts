@@ -50,6 +50,15 @@ const MAX_TOTAL_MS = 3 * 60 * 60 * 1000;
 // still wasted duplicate work to avoid where possible.
 const STALE_PROCESSING_MS = MAX_TOTAL_MS + 30 * 60 * 1000;
 
+class IncompleteExportError extends Error {
+    constructor(missingAudioCount: number) {
+        super(
+            `Export incomplete: audio was missing or unreadable for ${missingAudioCount} recording(s). The archive was discarded.`,
+        );
+        this.name = "IncompleteExportError";
+    }
+}
+
 /**
  * Runs `run` under both a stall timeout (reset on every `onProgress()`
  * call) and a hard total-duration ceiling. Either one aborts `signal`
@@ -126,6 +135,10 @@ async function processJob(job: {
             { stallMs: STALL_TIMEOUT_MS, maxTotalMs: MAX_TOTAL_MS },
         );
 
+        if (result.missingAudioCount > 0) {
+            throw new IncompleteExportError(result.missingAudioCount);
+        }
+
         const completed = await completeExportJob({
             jobId: job.id,
             claimToken: job.claimToken,
@@ -155,11 +168,15 @@ async function processJob(job: {
         });
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const outcome = await recordExportJobFailure(
-            job.id,
-            job.claimToken,
-            message,
-        );
+        const outcome =
+            error instanceof IncompleteExportError
+                ? await recordExportJobFailure(
+                      job.id,
+                      job.claimToken,
+                      message,
+                      true,
+                  )
+                : await recordExportJobFailure(job.id, job.claimToken, message);
         if (outcome === null) {
             // Claim superseded -- another worker owns (or already resolved)
             // this job. Nothing to record against a claim we no longer

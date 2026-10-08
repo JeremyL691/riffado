@@ -6,6 +6,7 @@ const {
     buildArchiveMock,
     emailMock,
     storageMock,
+    posthogMock,
     envMock,
 } = vi.hoisted(() => ({
     dbMock: { select: vi.fn() },
@@ -25,6 +26,7 @@ const {
     storageMock: {
         deleteFile: vi.fn(),
     },
+    posthogMock: { captureServerException: vi.fn() },
     envMock: { APP_URL: "https://app.example.com" },
 }));
 
@@ -34,6 +36,7 @@ vi.mock("@/db/queries/export-jobs", () => queriesMock);
 vi.mock("@/lib/export/build-archive", () => buildArchiveMock);
 vi.mock("@/lib/notifications/email", () => emailMock);
 vi.mock("@/lib/env", () => ({ env: envMock }));
+vi.mock("@/lib/posthog-server", () => posthogMock);
 vi.mock("@/lib/storage/factory", () => ({
     createStorageProvider: () => storageMock,
 }));
@@ -88,6 +91,7 @@ describe("export worker tick", () => {
         buildArchiveMock.buildAndUploadExportArchive.mockResolvedValue({
             recordingCount: 3,
             fileSize: 12345,
+            missingAudioCount: 0,
         });
 
         await tick();
@@ -112,6 +116,45 @@ describe("export worker tick", () => {
         );
     });
 
+    it("marks the export failed and discards the archive when audio is missing", async () => {
+        queriesMock.claimPendingExportJobs.mockResolvedValue([
+            {
+                id: "job-incomplete",
+                userId: "user-1",
+                claimToken: "token-incomplete",
+            },
+        ]);
+        buildArchiveMock.buildAndUploadExportArchive.mockResolvedValue({
+            recordingCount: 3,
+            fileSize: 900,
+            missingAudioCount: 1,
+        });
+        queriesMock.recordExportJobFailure.mockResolvedValue({
+            status: "failed",
+            attempts: 1,
+        });
+        const errorSpy = vi
+            .spyOn(console, "error")
+            .mockImplementation(() => {});
+
+        await tick();
+        errorSpy.mockRestore();
+
+        expect(queriesMock.recordExportJobFailure).toHaveBeenCalledWith(
+            "job-incomplete",
+            "token-incomplete",
+            expect.stringContaining(
+                "audio was missing or unreadable for 1 recording(s)",
+            ),
+            true,
+        );
+        expect(queriesMock.completeExportJob).not.toHaveBeenCalled();
+        expect(storageMock.deleteFile).toHaveBeenCalledWith(
+            "exports/user-1/job-incomplete-token-incomplete.zip",
+        );
+        expect(emailMock.sendExportReadyEmail).not.toHaveBeenCalled();
+    });
+
     it("discards the result and does not notify when completion finds the claim was superseded", async () => {
         queriesMock.claimPendingExportJobs.mockResolvedValue([
             { id: "job-1", userId: "user-1", claimToken: "stale-token" },
@@ -119,6 +162,7 @@ describe("export worker tick", () => {
         buildArchiveMock.buildAndUploadExportArchive.mockResolvedValue({
             recordingCount: 1,
             fileSize: 100,
+            missingAudioCount: 0,
         });
         // Someone else's claim token won: completeExportJob's WHERE
         // clause matched zero rows.
@@ -227,7 +271,11 @@ describe("export worker tick", () => {
         ]);
         buildArchiveMock.buildAndUploadExportArchive
             .mockRejectedValueOnce(new Error("job-a exploded"))
-            .mockResolvedValueOnce({ recordingCount: 1, fileSize: 999 });
+            .mockResolvedValueOnce({
+                recordingCount: 1,
+                fileSize: 999,
+                missingAudioCount: 0,
+            });
         const errorSpy = vi
             .spyOn(console, "error")
             .mockImplementation(() => {});
@@ -384,7 +432,11 @@ describe("export worker stall guard", () => {
                             onProgress();
                             if (ticks >= 4) {
                                 clearInterval(interval);
-                                resolve({ recordingCount: 1, fileSize: 1 });
+                                resolve({
+                                    recordingCount: 1,
+                                    fileSize: 1,
+                                    missingAudioCount: 0,
+                                });
                             }
                         },
                         2 * 60 * 1000,

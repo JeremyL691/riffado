@@ -244,6 +244,7 @@ export async function recordExportJobFailure(
     jobId: string,
     claimToken: string,
     errorMessage: string,
+    permanent = false,
 ): Promise<{ status: ExportJobStatus; attempts: number } | null> {
     const [row] = await db.execute<{
         status: ExportJobStatus;
@@ -255,15 +256,15 @@ export async function recordExportJobFailure(
             error_message = ${errorMessage},
             started_at = null,
             claim_token = case
-                when attempts + 1 >= ${EXPORT_MAX_ATTEMPTS} then claim_token
+                when ${permanent} or attempts + 1 >= ${EXPORT_MAX_ATTEMPTS} then claim_token
                 else null
             end,
             status = case
-                when attempts + 1 >= ${EXPORT_MAX_ATTEMPTS} then 'failed'
+                when ${permanent} or attempts + 1 >= ${EXPORT_MAX_ATTEMPTS} then 'failed'
                 else 'pending'
             end,
             completed_at = case
-                when attempts + 1 >= ${EXPORT_MAX_ATTEMPTS} then now()
+                when ${permanent} or attempts + 1 >= ${EXPORT_MAX_ATTEMPTS} then now()
                 else null
             end
         where id = ${jobId} and claim_token = ${claimToken}

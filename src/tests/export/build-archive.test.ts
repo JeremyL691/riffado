@@ -281,16 +281,113 @@ describe("buildAndUploadExportArchive", () => {
         });
 
         expect(result.recordingCount).toBe(1);
+        expect(result.missingAudioCount).toBe(1);
         const entries = await readZipEntries(storage.uploaded as Buffer);
         const manifest = JSON.parse(
             entries.get("manifest.json")?.buffer.toString("utf-8") ?? "{}",
         );
+        expect(manifest.audio_complete).toBe(false);
+        expect(manifest.missing_audio_count).toBe(1);
         expect(manifest.recordings[0].audio.included).toBe(false);
         expect(manifest.recordings[0].audio.reason).toBeTruthy();
         // No audio entry should have been written for this recording.
         expect([...entries.keys()].some((n) => n.includes("audio"))).toBe(
             false,
         );
+    });
+
+    it("preserves normalized timestamp provenance and speaker chunk identity in timeline.json", async () => {
+        storage.files.set("audio/normalized.mp3", Buffer.from("audio"));
+        const correction = {
+            reason: "chunk_end_guard",
+            original_end_ms: 1025,
+            normalized_end_ms: 1000,
+            chunk_index: 4,
+        };
+        mockSelectSequence([
+            [
+                {
+                    id: "rec-normalized",
+                    userId: "user-1",
+                    filename: "enc-filename",
+                    startTime: new Date("2026-01-01T00:00:00Z"),
+                    endTime: new Date("2026-01-01T00:01:00Z"),
+                    duration: 60000,
+                    filesize: 5,
+                    deviceSn: "SN1",
+                    storagePath: "audio/normalized.mp3",
+                },
+            ],
+            [
+                {
+                    recordingId: "rec-normalized",
+                    text: "enc-transcript",
+                    source: "riffado",
+                    timeline: [
+                        {
+                            start_ms: 900,
+                            end_ms: 1000,
+                            text: "last word",
+                            timestamp_source: "normalized",
+                            speaker_id: "speaker_0",
+                            chunk_index: 4,
+                            timestamp_correction: correction,
+                        },
+                    ],
+                    timelineSource: "normalized",
+                },
+            ],
+            [
+                {
+                    recordingId: "rec-normalized",
+                    status: "completed",
+                    generation: 2,
+                    configSnapshot: {
+                        timestamp_policy: {
+                            name: "chunk_end_guard_50ms_v1",
+                            normalized_segment_count: 1,
+                            ignored_blank_segment_count: 2,
+                        },
+                    },
+                },
+            ],
+            [],
+        ]);
+
+        await buildAndUploadExportArchive({
+            userId: "user-1",
+            storage,
+            storageKey: "exports/user-1/normalized.zip",
+        });
+
+        const entries = await readZipEntries(storage.uploaded as Buffer);
+        const timelineEntry = [...entries.entries()].find(([name]) =>
+            name.endsWith("/timeline.json"),
+        );
+        expect(
+            JSON.parse(timelineEntry?.[1].buffer.toString("utf-8") ?? "{}"),
+        ).toEqual({
+            schema_version: 1,
+            timestamp_source: "normalized",
+            processing: {
+                timestamp_policy: {
+                    name: "chunk_end_guard_50ms_v1",
+                    normalized_segment_count: 1,
+                    ignored_blank_segment_count: 2,
+                },
+            },
+            segments: [
+                {
+                    start_ms: 900,
+                    end_ms: 1000,
+                    text: "last word",
+                    timestamp_source: "normalized",
+                    speaker_id: "speaker_0",
+                    chunk_index: 4,
+                    timestamp_correction: correction,
+                },
+            ],
+        });
     });
 
     it("aborts and rejects immediately when the signal is already aborted", async () => {
