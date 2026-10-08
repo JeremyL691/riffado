@@ -1,110 +1,69 @@
 ---
 title: Backup and restore
-description: Export your recordings, transcripts, and audio so you can leave at any time.
+description: Export your recordings or restore a self-hosted operations backup.
 ---
 
-Riffado has two separate export paths, deliberately. They serve
-different jobs:
+Riffado has separate export and operations-recovery paths:
 
-- **`/api/backup`** — a complete JSON archive of every recording row
-  and transcript that belongs to you. Built for full disaster
-  recovery and migration off the instance.
-- **`/api/export`** — every recording's transcript flattened into one
-  human-readable file (`txt`, `srt`, `vtt`) or a `json` dump. Built
-  for handing transcripts to other tools, not for backup.
+- **`/api/backup`** creates a full-data ZIP for taking your data with
+  you. Its manifest describes whether each recording's audio,
+  transcript, timeline, and summary were included. `timeline.json`
+  keeps timestamp provenance and per-segment correction details.
+- **`/api/export`** flattens transcripts into one human-readable
+  `txt`, `srt`, `vtt`, or `json` file. It is for handing transcript
+  text to other tools.
+- **Operations backup** is the consistent Postgres dump, audio and
+  storage volumes, SQLite-consistent pipeline database backup, and
+  pipeline work directory used to restore a self-hosted service.
 
-The audio files themselves live in your configured storage backend
-(local volume or S3 bucket) and are backed up the same way you'd back
-up any other binary blob.
-
-## Backup the database state
+## Full-data ZIP export
 
 **Settings → Export/Backup → Create Backup** (or `POST /api/backup`)
-produces a single JSON file:
+produces a ZIP containing `manifest.json` and a folder for each
+recording. A folder can include `audio.<ext>`, `transcript.txt`,
+`timeline.json`, and `summary.json`. The manifest records which files
+were included. If any recording's audio is missing or unreadable, the
+export worker marks the job failed, discards the partial ZIP, and does
+not send a ready notification. Check the manifest when verifying an
+archive produced by the builder or another compatible tool.
 
-```json
-{
-  "version": "1.0",
-  "createdAt": "2026-05-13T12:00:00.000Z",
-  "userId": "...",
-  "recordings": [
-    {
-      "id": "...",
-      "filename": "Team standup",
-      "duration": 1820,
-      "startTime": "...",
-      "endTime": "...",
-      "filesize": 1234567,
-      "deviceSn": "...",
-      "transcription": {
-        "text": "Plaintext transcript text...",
-        "provider": "...",
-        "model": "..."
-      }
-    }
-  ]
-}
-```
+The ZIP is **plaintext** because Riffado decrypts your fields before
+serialization. Restrict access, store it encrypted, and do not email it.
+Keep the export separate from the encryption key. The ZIP does not
+contain the key and is not a server restore package.
 
-The archive is **plaintext**. Riffado's at-rest encryption decrypts
-all fields before serialization because the backup is *your* export of
-your own data — you own it from this point. Treat the file the same
-way you'd treat an unencrypted database dump: store it encrypted,
-restrict access, don't email it.
-
-The backup does **not** include audio files. Back those up separately.
-
-## Backup the audio files
-
-- **Local storage backend.** The Docker volume that mounts at
-  `/app/audio` inside the container holds every audio file. Snapshot
-  it the same way you snapshot any other volume — `restic`, `rsync`,
-  ZFS snapshots, your choice.
-- **S3 backend.** Whichever bucket you configured already lives
-  outside the instance. Enable versioning, cross-region replication,
-  or a lifecycle copy job on the bucket itself.
-
-The path layout inside the bucket / directory is
-`{userId}/{filename}.mp3`, with `(2)`, `(3)`,&nbsp;… suffixes appended
-on collisions.
-
-## Bulk transcript export
+## Transcript export
 
 `GET /api/export?format=<fmt>` flattens every one of your recordings
-into a single file:
+into one file:
 
-| Format | Content                                                  |
-| ------ | -------------------------------------------------------- |
-| `json` | One JSON document with every recording + transcript      |
-| `txt`  | Plaintext, one block per recording (filename, time, text)|
-| `srt`  | SubRip subtitles, all recordings concatenated            |
-| `vtt`  | WebVTT subtitles, all recordings concatenated            |
+| Format | Content |
+| ------ | ------- |
+| `json` | One JSON document with every recording and transcript |
+| `txt`  | Plaintext, one block per recording |
+| `srt`  | SubRip subtitles for all recordings |
+| `vtt`  | WebVTT subtitles for all recordings |
 
-The default format is whatever you set as **Settings → Export/Backup
-→ Default export format**, falling back to `json`. The **Export All**
-button in that same panel calls this endpoint.
+## Operations restore
 
-## Restore
+There is no ZIP import endpoint. Restore an operations backup into an
+isolated self-hosted stack using the Postgres dump, audio and storage
+volumes, pipeline SQLite backup and work directory. Restore the matching
+`ENCRYPTION_KEY` from its separate secure storage. Disable automatic sync
+and external provider access during verification. Compare recording and
+transcript counts and hashes, summary hashes, audio hashes, timeline
+provenance, and correction metadata before returning the restored stack
+to service.
 
-There is no `POST /api/backup/restore` endpoint today. The backup file
-is the export half of the contract — it lets you leave the instance
-with your data intact, which is what "export parity" guarantees. If
-you need to import a backup into a fresh instance, the supported path
-is a Postgres-level restore (the snapshot of the database volume), not
-a JSON re-import.
+The ZIP is an export artifact; uploading it does not recreate database
+records. See the [long-audio operations runbook](../../../docs/audio-pipeline-operations.md)
+for the isolated restore and export verification procedure.
 
-If you need a programmatic re-import — for migrating between
-self-host instances, for instance — file an issue with the use case.
-It's a deliberate gap, not an oversight, and the right shape depends
-on the use case.
-
-## What's encrypted vs. what's plaintext
-
-A reminder, because this trips people up:
+## What's encrypted vs. plaintext
 
 - **In the database**, sensitive fields are encrypted at rest with
   AES-256-GCM (see [Encryption at rest](../reference/encryption-at-rest)).
-- **In a backup file produced by `/api/backup`**, those fields are
-  decrypted before serialization. Your responsibility from there.
-- **Audio files in storage** are *not* encrypted by Riffado's
-  app-layer encryption — use bucket-level SSE if you need that.
+- **In a ZIP from `/api/backup`**, those fields are decrypted before
+  serialization. Protect that file as plaintext personal data.
+- **Audio in storage** is not encrypted by Riffado's app-layer
+  encryption. Use bucket-level server-side encryption when needed.

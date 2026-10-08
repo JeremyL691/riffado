@@ -19,20 +19,20 @@ Long recordings benefit from more than a larger upload limit. Processing should 
 - **Process speech, skip long silences.** Silero VAD runs locally. Short pauses remain in the audio, and chunks prefer natural pauses near two minutes.
 - **Continue after interruptions.** Jobs, VAD checkpoints, and completed chunk results persist on disk. Failed chunks can be retried without discarding successful work.
 - **Listen from the transcript.** Click a timestamped segment to seek the original recording. The current segment is highlighted during playback.
-- **Keep timing honest.** Native provider timestamps are validated and restored to the source recording clock. Missing or invalid timestamps produce a saved transcript with `needs_alignment`, rather than estimated positions.
+- **Keep timing honest.** Native provider timestamps are validated and restored to the source recording clock. Whitespace-only segments do not affect positioning. End times up to 50 ms beyond a chunk are clamped and recorded as `normalized`; larger errors and missing or invalid timestamps produce a saved transcript with `needs_alignment`, rather than estimated positions.
 - **Take the timeline with you.** Full-data archives include a versioned `timeline.json` with segment timing, timestamp provenance, and processing configuration.
 
 ## What changed
 
-This branch tracks upstream **main** (synced October 2026). Recent upstream capabilities — speaker diarization via ElevenLabs Scribe, automatic summaries, original-audio download, and long-recording timeout fixes — are included in this sync; the comparison below describes the fork's additions on top of that baseline.
+This enhancement is based on upstream commit `b518379`; its long-audio baseline is `5337fdb`. Upstream provides speaker diarization via ElevenLabs Scribe, automatic summaries, original-audio download, and long-recording timeout fixes. This branch adds a Core-mediated ElevenLabs chunk route to the durable long-audio pipeline while keeping provider credentials in Core.
 
 | Area | Inherited from Riffado | Added by this fork |
 | --- | --- | --- |
 | Recordings | Plaud sync, original audio storage and playback | Local VAD and continuous, non-overlapping speech chunks |
-| Transcription | User-configured providers and browser Whisper | Durable server jobs with chunk-level persistence and retries |
+| Transcription | User-configured providers and browser Whisper | Durable server jobs with chunk-level persistence and retries; server chunks can reuse the Core ElevenLabs Scribe client |
 | Playback | Recording player and transcript views | Click-to-seek segments and active-segment highlighting |
 | Progress | Existing transcription controls | Processing phases, progress, cancellation, retry, and disk-space pause/recovery |
-| Timing | Provider-dependent transcription output | Structured absolute timestamps with strict validation |
+| Timing | Provider-dependent transcription output | Structured absolute timestamps; bounded 50 ms chunk-end normalization with provenance and strict rejection beyond the bound |
 | Export | Transcript formats and full-data archives | `timeline.json` alongside the transcript and processing metadata |
 
 Plaud connection, summaries, title generation, local/S3 storage, encrypted Core data, and automation APIs come from the original project. Browser transcription continues to use its existing path.
@@ -89,7 +89,7 @@ For storage, job controls, provider behavior, and upgrades, see the [processing 
 
 - The pipeline is for self-hosted server transcription. Hosted mode and browser transcription use the original paths.
 - The implementation accepts recordings up to 24 hours. That is an enforced limit, not a claim of a completed 24-hour endurance test.
-- Playback positioning requires valid segment timestamps from the configured model. Gemini and chat-style transcription currently save text without a timeline.
+- Playback positioning requires valid segment timestamps from the configured model. The server ElevenLabs chunk route can return word timings; Gemini and chat-style transcription currently save text without a timeline.
 - The default service budget is one recording job, two concurrent STT requests, two CPUs, and 2 GiB of RAM. Decoded 24-hour PCM needs about 2.76 GB of disk space, plus the source audio and temporary files.
 - The fork has not established comparative accuracy, latency, or provider-cost benchmarks. VAD and chunking add their own processing overhead.
 - Upstream is synced through October 2026. Later upstream changes need a future sync, and databases should not be moved between this fork and upstream builds with different migration histories.

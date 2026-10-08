@@ -44,7 +44,13 @@ Select a server provider in Riffado's settings before requesting transcription.
 The bridge uses the existing provider configuration for OpenAI-style, Gemini,
 and chat-style requests. Timestamp support depends on the selected model and its
 actual response. Gemini and chat-style requests currently provide text only.
-This v0.6.4-based fork does not contain later upstream ElevenLabs integration.
+The ElevenLabs path reuses Core's existing Scribe client for each audio chunk.
+Core keeps the API key, applies the stored base-URL policy and request timeout,
+and sends only the returned text and word timings to the private pipeline. New
+jobs snapshot the diarization toggle and optional speaker-count hint. Older jobs
+without those fields use the upstream diarization default and no speaker-count
+hint. Speaker IDs are scoped to their source chunk; `speaker_0` in two chunks is
+not evidence that the same person spoke in both.
 
 The dashboard displays the current processing phase and progress. Cancel stops
 the task; Retry requeues failed work while retaining completed chunk results.
@@ -63,14 +69,19 @@ is removed after Core acknowledges a persisted result or cancellation is
 finalized. Never commit a copy of this volume.
 
 Back up Core's database, its encryption key, recording storage, and the pipeline
-volume before an upgrade. The encryption key is required to recover encrypted
-content. Do not use volume-deleting Compose commands as an ordinary restart.
+volume before an upgrade. A Postgres dump and storage snapshot are the
+operations-recovery set; the user's full-data ZIP is a portable export, not a
+server restore package. The encryption key is required to recover encrypted
+content and must be stored separately from the database backup. See the
+[operations backup, restore, and verification runbook](audio-pipeline-operations.md).
+Do not use volume-deleting Compose commands as an ordinary restart.
 
-This branch starts at upstream v0.6.4 and has its own `0036` and `0037`
-migrations. Later upstream uses those numbers for different changes. Switching
-between this fork and later upstream requires a reviewed migration plan; it is
-not a drop-in image swap. Reverting to an upstream image would also hide the
-fork's timeline and processing state, even though the added columns are retained.
+The enhancement branch is based on upstream commit `b518379`; its long-audio
+baseline is `5337fdb`. This fork owns migrations `0039` and `0040`. Do not move a
+database between this fork and upstream builds with different migration
+histories without a reviewed migration plan. Reverting to an upstream image
+would hide the fork's timeline and processing state even though its columns
+remain in the database.
 
 ## Processing contract
 
@@ -84,10 +95,35 @@ does not bridge long pauses or change the chunk's absolute source offset.
 
 Chunk times use integer samples from the original recording. Provider-native
 segment timestamps are validated before conversion to absolute milliseconds.
-If timestamps are missing or invalid, Core stores the complete text with job
-status `needs_alignment`; it does not invent positions. Search and summaries
-continue to use the full transcript text. Full-data exports include a
-versioned `timeline.json` for transcripts with validated timing data.
+Whitespace-only provider segments are ignored for positioning, while the
+provider's complete text remains unchanged. An end-time overshoot of up to and
+including 50 ms is clamped to the actual chunk end and recorded on the segment
+with its original end, corrected end, chunk index, and reason. Those timelines
+use source `normalized`; unchanged provider timestamps use `native`. Larger
+overshoots, invalid numbers, negative or unordered starts, zero-length results
+after correction, and non-empty text without usable timestamps continue to
+produce `needs_alignment`; no positions are invented. Search and summaries
+continue to use the full transcript text.
+
+Full-data ZIP exports keep `schema_version: 1` and include `timeline.json` with
+the timestamp source, processing snapshot, speaker IDs and chunk indexes, and
+per-segment correction records. Old timelines without these optional fields
+remain readable. The offline repair command can preview the current acknowledged
+alignment jobs and create a private, hash-bound plan. Run it inside the pipeline
+container and review its counts before applying:
+
+```sh
+docker compose exec audio-pipeline python -m audio_pipeline.repair \
+  --preview-output /data/repairs/timeline-repair.json
+docker compose exec audio-pipeline python -m audio_pipeline.repair \
+  --apply /data/repairs/timeline-repair.json
+```
+
+The plan contains plaintext transcript material. Keep it in the private
+pipeline data volume or another access-restricted location; after successful
+application it is replaced with a receipt. Apply verifies the current transcript
+hash and latest task generation and refuses deleted recordings or active jobs.
+It does not call a transcription provider or regenerate summaries.
 
 The service exposes authenticated job submit, status, result, retry, cancel,
 and acknowledge endpoints under `/v1/jobs`. Its only unauthenticated endpoint
