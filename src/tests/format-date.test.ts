@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { formatRecordingDateTimeRange } from "@/lib/format-date";
+import {
+    dateGroupFallbackLabel,
+    formatRecordingDateTimeRange,
+} from "@/lib/format-date";
+
+describe("dateGroupFallbackLabel", () => {
+    it("uses the UTC month so server and browser time zones render the same placeholder", () => {
+        expect(dateGroupFallbackLabel("2026-10-01T00:30:00.000Z")).toBe(
+            "October 2026",
+        );
+    });
+});
 
 describe("formatRecordingDateTimeRange", () => {
     it("shows the recorded date with start and end times", () => {

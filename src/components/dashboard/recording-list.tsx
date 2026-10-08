@@ -21,7 +21,7 @@ import {
 } from "@/components/dashboard/recording-list-toolbar";
 import { RecordingRow } from "@/components/dashboard/recording-row";
 import { Card, CardContent } from "@/components/ui/card";
-import { dateGroupLabel } from "@/lib/format-date";
+import { dateGroupFallbackLabel, dateGroupLabel } from "@/lib/format-date";
 import type { DateTimeFormat } from "@/types/common";
 import type { Recording } from "@/types/recording";
 
@@ -98,9 +98,14 @@ export function RecordingList({
     const [density, setDensity] = useState<ListDensity>(initialDensity);
     const [query, setQuery] = useState("");
     const [visibleCount, setVisibleCount] = useState(initialChunkSize);
+    const [hasHydrated, setHasHydrated] = useState(false);
     const searchRef = useRef<HTMLInputElement>(null);
     const sentinelRef = useRef<HTMLDivElement>(null);
     const rowRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+
+    useEffect(() => {
+        setHasHydrated(true);
+    }, []);
 
     const setSortOrderPersisted = useCallback((next: SortOrder) => {
         setSortOrder(next);
@@ -161,7 +166,9 @@ export function RecordingList({
         }
         const groups: { label: string; items: Recording[] }[] = [];
         for (const r of visible) {
-            const label = dateGroupLabel(r.startTime);
+            const label = hasHydrated
+                ? dateGroupLabel(r.startTime)
+                : dateGroupFallbackLabel(r.startTime);
             const last = groups[groups.length - 1];
             if (last && last.label === label) {
                 last.items.push(r);
@@ -170,7 +177,7 @@ export function RecordingList({
             }
         }
         return groups;
-    }, [visible, sortOrder]);
+    }, [visible, sortOrder, hasHydrated]);
 
     // Reset visibleCount when the filter changes so search results
     // aren't accidentally truncated.

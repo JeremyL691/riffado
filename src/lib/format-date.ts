@@ -60,3 +60,16 @@ export function dateGroupLabel(date: Date | string): string {
     }
     return isThisYear(d) ? format(d, "MMMM") : format(d, "MMMM yyyy");
 }
+
+/**
+ * Time-zone-stable month label for the server-rendered recording list.
+ * The list swaps to the user's local Today/Yesterday grouping after hydration.
+ */
+export function dateGroupFallbackLabel(date: Date | string): string {
+    const d = typeof date === "string" ? new Date(date) : date;
+    return new Intl.DateTimeFormat("en-US", {
+        month: "long",
+        timeZone: "UTC",
+        year: "numeric",
+    }).format(d);
+}
