@@ -468,6 +468,114 @@ describe("elevenLabsTranscribe -- diarized formatting", () => {
         expect(result.speakerCount).toBe(0);
     });
 
+    it("returns word timestamps and chunk-local speaker ids", async () => {
+        const fetchSpy = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    text: "Hello world",
+                    words: [
+                        {
+                            text: "Hello",
+                            type: "word",
+                            start: 0.1,
+                            end: 0.4,
+                            speaker_id: "speaker_0",
+                        },
+                        { text: " ", type: "spacing" },
+                        {
+                            text: "world",
+                            type: "word",
+                            start: 0.5,
+                            end: 0.9,
+                            speaker_id: "speaker_0",
+                        },
+                        { text: "[noise]", type: "audio_event" },
+                    ],
+                }),
+                { status: 200 },
+            ),
+        );
+        vi.stubGlobal("fetch", fetchSpy);
+
+        const result = await elevenLabsTranscribe({
+            apiKey: "k",
+            model: "scribe_v2",
+            file: fakeFile(),
+            diarize: true,
+            timeoutMs: 5000,
+        });
+
+        expect(result.text).toBe("Speaker 1: Hello world");
+        expect(result.segments).toEqual([
+            {
+                start: 0.1,
+                end: 0.4,
+                text: "Hello",
+                speaker_id: "speaker_0",
+            },
+            {
+                start: 0.5,
+                end: 0.9,
+                text: "world",
+                speaker_id: "speaker_0",
+            },
+        ]);
+    });
+
+    it("returns timestamped words even when diarization is disabled", async () => {
+        const fetchSpy = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    text: "Hello",
+                    words: [
+                        { text: "Hello", type: "word", start: 0.2, end: 0.6 },
+                    ],
+                }),
+                { status: 200 },
+            ),
+        );
+        vi.stubGlobal("fetch", fetchSpy);
+
+        const result = await elevenLabsTranscribe({
+            apiKey: "k",
+            model: "scribe_v2",
+            file: fakeFile(),
+            diarize: false,
+            timeoutMs: 5000,
+        });
+
+        expect(result.segments).toEqual([
+            { start: 0.2, end: 0.6, text: "Hello" },
+        ]);
+    });
+
+    it("keeps the transcript but omits timings if a spoken word has no timestamp", async () => {
+        const fetchSpy = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    text: "Hello world",
+                    words: [
+                        { text: "Hello", type: "word", start: 0.1, end: 0.4 },
+                        { text: "world", type: "word" },
+                    ],
+                }),
+                { status: 200 },
+            ),
+        );
+        vi.stubGlobal("fetch", fetchSpy);
+
+        const result = await elevenLabsTranscribe({
+            apiKey: "k",
+            model: "scribe_v2",
+            file: fakeFile(),
+            diarize: false,
+            timeoutMs: 5000,
+        });
+
+        expect(result.text).toBe("Hello world");
+        expect(result).not.toHaveProperty("segments");
+    });
+
     it("throws on an empty transcript", async () => {
         const fetchSpy = vi
             .fn()

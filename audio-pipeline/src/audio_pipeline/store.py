@@ -232,6 +232,28 @@ class JobStore:
             )
             return cur.rowcount == 1
 
+    def repair_acknowledged_result(self, job_id: str, result: dict[str, Any]) -> bool:
+        if result.get("schema_version") != 1 or result.get("status") != "completed":
+            return False
+        with self._lock, self._connect() as db:
+            row = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if not row or not row["acknowledged"] or row["status"] != "acknowledged":
+                return False
+            current = json.loads(row["result_json"]) if row["result_json"] else None
+            if not current:
+                return False
+            if current.get("status") == "completed":
+                return current == result
+            if current.get("status") != "needs_alignment":
+                return False
+            db.execute(
+                """UPDATE jobs SET result_json=?,phase='completed',progress=1,
+                   error_type=NULL,error=NULL,updated_at=?
+                   WHERE id=? AND acknowledged=1 AND status='acknowledged'""",
+                (json.dumps(result, separators=(",", ":")), _now(), job_id),
+            )
+            return True
+
     @staticmethod
     def _job(row: sqlite3.Row) -> dict[str, Any]:
         item = dict(row)

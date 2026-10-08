@@ -120,6 +120,19 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail="Job result is not ready")
         return {"job_id": job_id, "status": "acknowledged"}
 
+    @app.post("/v1/jobs/{job_id}/repair", dependencies=[Depends(authorize)])
+    async def repair_acknowledged_result(
+        job_id: str,
+        body: dict[str, Any],
+        request: Request,
+    ) -> dict[str, str]:
+        if not request.app.state.store.repair_acknowledged_result(job_id, body):
+            raise HTTPException(
+                status_code=409,
+                detail="Pipeline job is not an acknowledged alignment result",
+            )
+        return {"job_id": job_id, "status": "acknowledged", "phase": "completed"}
+
     return app
 
 

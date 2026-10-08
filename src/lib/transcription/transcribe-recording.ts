@@ -440,6 +440,8 @@ async function transcribeRecordingInner(
                 provider: credentials.provider,
                 model,
                 language: defaultLanguage,
+                speakerDiarization: diarize,
+                diarizationSpeakerCount: numSpeakers,
                 trigger: opts.trigger ?? "manual",
                 force: opts.force ?? false,
             });

@@ -9,6 +9,7 @@ import { env } from "@/lib/env";
 import { buildAudioFile } from "@/lib/transcription/audio-file";
 import { isAudioPipelineServiceRequest } from "@/lib/transcription/audio-pipeline-auth";
 import { chatTranscribe } from "@/lib/transcription/chat-transcribe";
+import { elevenLabsTranscribe } from "@/lib/transcription/elevenlabs-transcribe";
 import {
     buildTranscriptionParams,
     getResponseFormat,
@@ -134,6 +135,44 @@ export async function POST(
         const style = getTranscriptionStyle(credentials.provider);
         const apiKey = decrypt(credentials.apiKey);
 
+        if (style === "elevenlabs") {
+            const snapshot =
+                job.configSnapshot &&
+                typeof job.configSnapshot === "object" &&
+                !Array.isArray(job.configSnapshot)
+                    ? (job.configSnapshot as Record<string, unknown>)
+                    : {};
+            const speakerDiarization =
+                typeof snapshot.speaker_diarization === "boolean"
+                    ? snapshot.speaker_diarization
+                    : true;
+            const speakerCount = snapshot.diarization_speaker_count;
+            const result = await elevenLabsTranscribe({
+                apiKey,
+                model: job.model,
+                file: audioFile,
+                baseUrl: credentials.baseUrl,
+                isHosted: env.IS_HOSTED,
+                language,
+                diarize: speakerDiarization,
+                ...(speakerDiarization &&
+                typeof speakerCount === "number" &&
+                Number.isInteger(speakerCount) &&
+                speakerCount >= 1 &&
+                speakerCount <= 32
+                    ? { numSpeakers: speakerCount }
+                    : {}),
+                timeoutMs: env.WHISPER_REQUEST_TIMEOUT_MS,
+            });
+            const segments = normalizeNativeSegments(result.segments);
+            return Response.json({
+                text: result.text,
+                language: result.detectedLanguage,
+                segments,
+                raw_timestamp_capability: segments ? "native" : "none",
+            });
+        }
+
         if (style === "gemini") {
             const result = await geminiTranscribe({
                 apiKey,
@@ -230,6 +269,7 @@ function normalizeNativeSegments(
             start?: unknown;
             end?: unknown;
             text?: unknown;
+            speaker_id?: unknown;
         };
         if (
             typeof segment.start !== "number" ||
@@ -241,6 +281,9 @@ function normalizeNativeSegments(
             start: segment.start,
             end: segment.end,
             text: segment.text,
+            ...(typeof segment.speaker_id === "string"
+                ? { speaker_id: segment.speaker_id }
+                : {}),
         });
     }
     return segments;

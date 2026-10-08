@@ -31,6 +31,8 @@ export interface QueueAudioPipelineInput {
     provider: string;
     model: string;
     language?: string;
+    speakerDiarization?: boolean;
+    diarizationSpeakerCount?: number;
     trigger: "manual" | "sync";
     force: boolean;
 }
@@ -122,6 +124,9 @@ export async function queueAudioPipelineJob(
             phase: "queued",
             configSnapshot: {
                 schema_version: 1,
+                speaker_diarization: input.speakerDiarization ?? true,
+                diarization_speaker_count:
+                    input.diarizationSpeakerCount ?? null,
                 vad: {
                     model: "silero-vad-onnx",
                     threshold: 0.5,
@@ -286,7 +291,8 @@ async function claimJob(): Promise<ClaimedJob | null> {
     });
 }
 
-async function processJob(job: ClaimedJob): Promise<void> {
+/** @internal Exported so recovery behavior can be exercised at process boundaries. */
+export async function processJob(job: ClaimedJob): Promise<void> {
     let pipelineJobId = job.pipelineJobId;
     if (!pipelineJobId) {
         const response = await pipelineRequest("/v1/jobs", {
@@ -448,9 +454,16 @@ interface PipelineResult {
     status: "completed" | "needs_alignment";
     text: string;
     timeline: unknown[];
-    timestamp_source: "native" | null;
+    timestamp_source: "native" | "normalized" | null;
     detected_language?: string | null;
-    metadata: { duration_ms?: number };
+    metadata: {
+        duration_ms?: number;
+        timestamp_policy?: {
+            name: "chunk_end_guard_50ms_v1";
+            normalized_segment_count: number;
+            ignored_blank_segment_count: number;
+        };
+    };
 }
 
 async function persistPipelineResult(
@@ -499,6 +512,7 @@ async function persistPipelineResult(
             .select({
                 generation: audioPipelineJobs.generation,
                 status: audioPipelineJobs.status,
+                configSnapshot: audioPipelineJobs.configSnapshot,
             })
             .from(audioPipelineJobs)
             .where(
@@ -600,6 +614,19 @@ async function persistPipelineResult(
                 timestampSource: timeline.length
                     ? (result.timestamp_source ?? "native")
                     : null,
+                ...(result.metadata?.timestamp_policy
+                    ? {
+                          configSnapshot: {
+                              ...((currentJob.configSnapshot &&
+                              typeof currentJob.configSnapshot === "object" &&
+                              !Array.isArray(currentJob.configSnapshot)
+                                  ? currentJob.configSnapshot
+                                  : {}) as Record<string, unknown>),
+                              timestamp_policy:
+                                  result.metadata.timestamp_policy,
+                          },
+                      }
+                    : {}),
                 errorType: null,
                 errorMessage:
                     status === "needs_alignment"
@@ -879,7 +906,8 @@ export async function acknowledgePipelineJob(jobId: string): Promise<void> {
     }
 }
 
-async function reconcilePipelineFinalization(): Promise<void> {
+/** @internal Exported so acknowledgement recovery can be exercised after restart. */
+export async function reconcilePipelineFinalization(): Promise<void> {
     const pending = await db
         .select({
             id: audioPipelineJobs.id,

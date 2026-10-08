@@ -88,6 +88,103 @@ def test_invalid_provider_timestamps_are_rejected_without_clamping() -> None:
     assert needs_alignment
 
 
+@pytest.mark.parametrize("overshoot", [0.025, 0.05])
+def test_small_chunk_end_overshoot_is_normalized_with_provenance(overshoot: float) -> None:
+    plan = ChunkPlan(7, 16_000, 32_000, 16_000)
+    mapped = map_native_segments(
+        plan,
+        [{"start": 0.5, "end": 1 + overshoot, "text": "last word"}],
+    )
+
+    assert mapped[0].end_ms == 2_000
+    assert mapped[0].timestamp_source == "normalized"
+    assert mapped[0].to_dict()["timestamp_correction"] == {
+        "reason": "chunk_end_guard",
+        "original_end_ms": round((1 + overshoot + 1) * 1000),
+        "normalized_end_ms": 2_000,
+        "chunk_index": 7,
+    }
+
+
+@pytest.mark.parametrize("end", [1.0500001, 1.0501])
+def test_chunk_end_overshoot_over_50ms_is_rejected(end: float) -> None:
+    plan = ChunkPlan(0, 0, 16_000, 16_000)
+    with pytest.raises(InvalidTimestampError):
+        map_native_segments(
+            plan,
+            [{"start": 0.5, "end": end, "text": "outside"}],
+        )
+
+
+def test_normalization_cannot_create_zero_length_segment() -> None:
+    plan = ChunkPlan(0, 0, 16_000, 16_000)
+    with pytest.raises(InvalidTimestampError):
+        map_native_segments(
+            plan,
+            [{"start": 1.0, "end": 1.05, "text": "outside"}],
+        )
+
+
+def test_blank_provider_segments_are_ignored_without_changing_full_text() -> None:
+    plan = ChunkPlan(0, 0, 16_000, 16_000)
+    text, timeline, needs_alignment = merge_chunk_results(
+        [
+            (
+                plan,
+                {
+                    "text": "the provider's complete text",
+                    "segments": [
+                        {"start": 0.0, "end": 0.0, "text": "  "},
+                        {"start": 0.25, "end": 0.75, "text": "word"},
+                    ],
+                },
+            )
+        ]
+    )
+
+    assert text == "the provider's complete text"
+    assert len(timeline) == 1
+    assert timeline[0].text == "word"
+    assert not needs_alignment
+
+
+def test_chunk_with_only_blank_segments_still_needs_alignment() -> None:
+    plan = ChunkPlan(0, 0, 16_000, 16_000)
+    text, timeline, needs_alignment = merge_chunk_results(
+        [
+            (
+                plan,
+                {
+                    "text": "unlocated text",
+                    "segments": [{"start": 0.0, "end": 0.5, "text": "  "}],
+                },
+            )
+        ]
+    )
+
+    assert text == "unlocated text"
+    assert timeline == []
+    assert needs_alignment
+
+
+def test_speaker_segment_keeps_its_chunk_local_identity() -> None:
+    plan = ChunkPlan(4, 32_000, 48_000, 16_000)
+    mapped = map_native_segments(
+        plan,
+        [
+            {
+                "start": 0.25,
+                "end": 0.75,
+                "text": "word",
+                "speaker_id": "speaker_0",
+            }
+        ],
+    )
+
+    assert mapped[0].to_dict()["speaker_id"] == "speaker_0"
+    assert mapped[0].to_dict()["chunk_index"] == 4
+
+
 def test_empty_provider_chunks_do_not_require_alignment() -> None:
     empty = ChunkPlan(0, 0, 16_000, 16_000)
     speech = ChunkPlan(1, 32_000, 48_000, 16_000)
@@ -188,3 +285,27 @@ def test_job_store_persists_cancellation_until_worker_acknowledges(tmp_path: Pat
     reopened = JobStore(tmp_path / "pipeline.sqlite3")
     assert reopened.is_cancelled(job["id"])
     assert reopened.get(job["id"])["status"] == "queued"
+
+
+def test_acknowledged_alignment_repair_is_idempotent_and_preserves_ack(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "pipeline.sqlite3")
+    job, _ = store.create("core-job-repair", "core-job-repair", 60_000)
+    original = {"schema_version": 1, "status": "needs_alignment", "text": "same"}
+    store.update(job["id"], status="needs_alignment", result_json=original)
+    assert store.acknowledge(job["id"])
+
+    repaired = {
+        "schema_version": 1,
+        "status": "completed",
+        "text": "same",
+        "timeline": [{"start_ms": 0, "end_ms": 100, "text": "same"}],
+        "timestamp_source": "native",
+    }
+    assert store.repair_acknowledged_result(job["id"], repaired)
+    assert store.repair_acknowledged_result(job["id"], repaired)
+    current = store.get(job["id"])
+    assert current["status"] == "acknowledged"
+    assert current["acknowledged"] is True
+    assert current["phase"] == "completed"
+    assert current["result"] == repaired
+    assert not store.repair_acknowledged_result(job["id"], {**repaired, "text": "different"})

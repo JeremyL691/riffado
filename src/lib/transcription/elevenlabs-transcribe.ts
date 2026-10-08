@@ -122,6 +122,8 @@ export class ElevenLabsFileTooLargeError extends Error {
 const elevenLabsWordSchema = z.object({
     text: z.string().max(1024),
     type: z.enum(["word", "spacing", "audio_event"]).optional(),
+    start: z.number().optional(),
+    end: z.number().optional(),
     speaker_id: z.string().max(128).nullable().optional(),
 });
 
@@ -159,6 +161,13 @@ export interface ElevenLabsTranscribeResult {
     detectedLanguage: string | null;
     /** Distinct speakers found. 0 when diarization was off or none detected. */
     speakerCount: number;
+    /** Native word timings when every spoken word has a valid timestamp pair. */
+    segments?: Array<{
+        start: number;
+        end: number;
+        text: string;
+        speaker_id?: string;
+    }> | null;
 }
 
 export const ELEVENLABS_HOSTED_BASE_URL_MESSAGE =
@@ -273,6 +282,11 @@ function formatDiarizedText(words: ElevenLabsWord[]): {
         if (word.type === "audio_event") continue;
         const speakerId = word.speaker_id;
         const wordText = flattenWordText(word.text);
+        if (word.type === "spacing") {
+            const last = lines.at(-1);
+            if (last) last.text += wordText;
+            continue;
+        }
         if (!speakerId) {
             return {
                 text: words
@@ -555,9 +569,36 @@ export async function elevenLabsTranscribe(
         );
     }
 
+    const speechWords = words.filter(
+        (word) =>
+            word.type !== "audio_event" &&
+            word.type !== "spacing" &&
+            word.text.trim(),
+    );
+    const timestampsAvailable =
+        speechWords.length > 0 &&
+        speechWords.every(
+            (word) =>
+                word.start !== undefined &&
+                word.end !== undefined &&
+                Number.isFinite(word.start) &&
+                Number.isFinite(word.end),
+        );
+    const segments = timestampsAvailable
+        ? speechWords.map((word) => ({
+              start: word.start as number,
+              end: word.end as number,
+              text: word.text.trim(),
+              ...(diarize && word.speaker_id
+                  ? { speaker_id: word.speaker_id }
+                  : {}),
+          }))
+        : null;
+
     return {
         text,
         detectedLanguage: normalizeLanguageCode(response.language_code),
         speakerCount,
+        ...(segments ? { segments } : {}),
     };
 }

@@ -321,7 +321,13 @@ class PipelineService:
             "schema_version": 1,
             "text": text,
             "timeline": [segment.to_dict() for segment in timeline],
-            "timestamp_source": "native" if timeline else None,
+            "timestamp_source": (
+                "normalized"
+                if any(segment.timestamp_source == "normalized" for segment in timeline)
+                else "native"
+                if timeline
+                else None
+            ),
             "detected_language": next(iter(languages)) if len(languages) == 1 else None,
             "status": "needs_alignment" if needs_alignment else "completed",
             "metadata": {
@@ -330,6 +336,20 @@ class PipelineService:
                 "duration_ms": round(sample_count * 1000 / SAMPLE_RATE),
                 "vad": self.config.vad.model_dump(mode="json"),
                 "chunking": self.config.chunking.model_dump(mode="json"),
+                "timestamp_policy": {
+                    "name": "chunk_end_guard_50ms_v1",
+                    "normalized_segment_count": sum(
+                        segment.timestamp_source == "normalized" for segment in timeline
+                    ),
+                    "ignored_blank_segment_count": sum(
+                        1
+                        for chunk in chunks
+                        for segment in (chunk["result"] or {}).get("segments") or []
+                        if isinstance(segment, dict)
+                        and isinstance(segment.get("text"), str)
+                        and not segment["text"].strip()
+                    ),
+                },
                 "chunks": [
                     {
                         "id": chunk["id"],
