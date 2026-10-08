@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft } from "lucide-react";
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { RecordingPlayer } from "@/components/dashboard/recording-player";
 import { TranscriptionPanel } from "@/components/dashboard/transcription-panel";
 import { Button } from "@/components/ui/button";
@@ -62,6 +62,12 @@ export function WorkstationDetailPane({
     const seekToMillisecondsRef = useRef<(milliseconds: number) => void>(
         () => {},
     );
+    const registerSeekToMilliseconds = useCallback(
+        (seek: (milliseconds: number) => void) => {
+            seekToMillisecondsRef.current = seek;
+        },
+        [],
+    );
     const [playbackTimeMs, setPlaybackTimeMs] = useState(0);
     return (
         <div
@@ -93,9 +99,7 @@ export function WorkstationDetailPane({
                         initialVolume={initialVolume}
                         initialAutoPlayNext={initialAutoPlayNext}
                         scrubberStyle={scrubberStyle}
-                        onRegisterSeek={(seek) => {
-                            seekToMillisecondsRef.current = seek;
-                        }}
+                        onRegisterSeek={registerSeekToMilliseconds}
                         onPlaybackTimeChange={setPlaybackTimeMs}
                         onRenamed={onRenamed}
                         onEnded={() => {
@@ -118,9 +122,9 @@ export function WorkstationDetailPane({
                         isTranscribing={isCurrentTranscribing}
                         onTranscribe={onTranscribe}
                         onTranscribeComplete={onTranscribeComplete}
-                        onSeekTimestamp={(milliseconds) =>
-                            seekToMillisecondsRef.current(milliseconds)
-                        }
+                        onSeekTimestamp={(milliseconds) => {
+                            seekToMillisecondsRef.current(milliseconds);
+                        }}
                         playbackTimeMs={playbackTimeMs}
                     />
                 </>

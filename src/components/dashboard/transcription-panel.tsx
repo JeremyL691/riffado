@@ -486,11 +486,11 @@ export function TranscriptionPanel({
                                                                 ? "time"
                                                                 : undefined
                                                         }
-                                                        onClick={() =>
+                                                        onClick={() => {
                                                             onSeekTimestamp?.(
                                                                 segment.start_ms,
-                                                            )
-                                                        }
+                                                            );
+                                                        }}
                                                         className={`w-full rounded px-2 py-1 text-left text-sm leading-relaxed hover:bg-background/70 disabled:cursor-default ${isActive ? "bg-background font-medium" : ""}`}
                                                     >
                                                         <span className="mr-2 font-mono text-xs text-muted-foreground">

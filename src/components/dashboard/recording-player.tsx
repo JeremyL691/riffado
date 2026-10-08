@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useCallback, useEffect, useLayoutEffect } from "react";
 import { RecordingPlayerControls } from "@/components/dashboard/recording-player-controls";
 import { RecordingPlayerHeader } from "@/components/dashboard/recording-player-header";
 import { Card, CardContent } from "@/components/ui/card";
@@ -56,6 +56,7 @@ export function RecordingPlayer({
         setVolume,
         playbackSpeed,
         togglePlayPause,
+        seekToMilliseconds,
         seekToRatio,
         seekRelative,
         cycleSpeed,
@@ -68,17 +69,18 @@ export function RecordingPlayer({
         initialAutoPlayNext,
     });
 
-    useEffect(() => {
+    const seekForCurrentRecording = useCallback(
+        (milliseconds: number) => {
+            if (!recording.id) return;
+            seekToMilliseconds(milliseconds);
+        },
+        [recording.id, seekToMilliseconds],
+    );
+
+    useLayoutEffect(() => {
         if (!onRegisterSeek) return;
-        onRegisterSeek((milliseconds) => {
-            const audio = audioRef.current;
-            if (!audio || !Number.isFinite(milliseconds)) return;
-            const targetSeconds = Math.max(0, milliseconds / 1000);
-            audio.currentTime = Number.isFinite(audio.duration)
-                ? Math.min(targetSeconds, audio.duration)
-                : targetSeconds;
-        });
-    }, [audioRef, onRegisterSeek]);
+        onRegisterSeek(seekForCurrentRecording);
+    }, [onRegisterSeek, seekForCurrentRecording]);
 
     useEffect(() => {
         onPlaybackTimeChange?.(currentTime * 1000);

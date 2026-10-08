@@ -48,7 +48,15 @@ export function usePlaybackEngine({
     const [playbackSpeed, setPlaybackSpeed] = useState(initialPlaybackSpeed);
     const [autoPlayNext] = useState(initialAutoPlayNext);
     const audioRef = useRef<HTMLAudioElement>(null);
-    const isSeekingRef = useRef(false);
+    const onEndedRef = useRef(onEnded);
+    const autoPlayNextRef = useRef(autoPlayNext);
+    const pendingSeekTimeRef = useRef<number | null>(null);
+    const pendingSeekRetryRef = useRef(false);
+
+    useEffect(() => {
+        onEndedRef.current = onEnded;
+        autoPlayNextRef.current = autoPlayNext;
+    }, [autoPlayNext, onEnded]);
 
     // Reset transport state and re-point src whenever the recording
     // *id* changes. Filename edits must not remount playback.
@@ -56,6 +64,8 @@ export function usePlaybackEngine({
         setCurrentTime(0);
         setDuration(0);
         setIsPlaying(false);
+        pendingSeekTimeRef.current = null;
+        pendingSeekRetryRef.current = false;
         if (audioRef.current) {
             audioRef.current.currentTime = 0;
             audioRef.current.src = `/api/recordings/${recording.id}/audio`;
@@ -75,45 +85,80 @@ export function usePlaybackEngine({
         }
     }, [playbackSpeed]);
 
-    // Listener wiring. Re-runs whenever the recording changes (so the
-    // ended handler closes over the right onEnded / autoPlayNext) but
-    // the listener identities themselves are stable within a single
-    // mount of the recording.
+    // Keep listeners attached to the same audio element for its lifetime.
+    // The recording-id effect above owns source changes; refs keep the
+    // ended callback current without reloading audio on parent renders.
     useEffect(() => {
         if (!audioRef.current) return;
         const audio = audioRef.current;
-        const recordingId = recording.id;
 
         const updateTime = () => {
-            if (!isSeekingRef.current) {
-                setCurrentTime(audio.currentTime);
+            const pendingSeekTime = pendingSeekTimeRef.current;
+            if (
+                pendingSeekTime !== null &&
+                Math.abs(audio.currentTime - pendingSeekTime) > 0.25 &&
+                audio.paused
+            ) {
+                return;
             }
+            pendingSeekTimeRef.current = null;
+            pendingSeekRetryRef.current = false;
+            setCurrentTime(audio.currentTime);
         };
         const updateDuration = () => {
             if (audio.duration && !Number.isNaN(audio.duration)) {
                 setDuration(audio.duration);
+                const pendingSeekTime = pendingSeekTimeRef.current;
+                if (
+                    pendingSeekTime !== null &&
+                    audio.readyState >= HTMLMediaElement.HAVE_METADATA
+                ) {
+                    const target = Math.min(audio.duration, pendingSeekTime);
+                    pendingSeekTimeRef.current = target;
+                    if (Math.abs(audio.currentTime - target) <= 0.25) {
+                        pendingSeekTimeRef.current = null;
+                        pendingSeekRetryRef.current = false;
+                        setCurrentTime(audio.currentTime);
+                    } else {
+                        pendingSeekRetryRef.current = false;
+                        audio.currentTime = target;
+                    }
+                }
             }
         };
         const handleEnded = () => {
             setIsPlaying(false);
-            if (autoPlayNext && onEnded) {
-                onEnded();
+            if (autoPlayNextRef.current && onEndedRef.current) {
+                onEndedRef.current();
             }
         };
+        const handlePlay = () => {
+            setIsPlaying(true);
+        };
+        const handlePause = () => setIsPlaying(false);
         const handleSeeked = () => {
-            isSeekingRef.current = false;
+            const pendingSeekTime = pendingSeekTimeRef.current;
+            if (
+                pendingSeekTime !== null &&
+                Math.abs(audio.currentTime - pendingSeekTime) > 0.25
+            ) {
+                if (!pendingSeekRetryRef.current) {
+                    pendingSeekRetryRef.current = true;
+                    audio.currentTime = pendingSeekTime;
+                }
+                return;
+            }
+            pendingSeekTimeRef.current = null;
+            pendingSeekRetryRef.current = false;
             setCurrentTime(audio.currentTime);
         };
-
-        if (audio.src !== `/api/recordings/${recordingId}/audio`) {
-            audio.src = `/api/recordings/${recordingId}/audio`;
-            audio.load();
-        }
 
         audio.addEventListener("timeupdate", updateTime);
         audio.addEventListener("loadedmetadata", updateDuration);
         audio.addEventListener("durationchange", updateDuration);
         audio.addEventListener("ended", handleEnded);
+        audio.addEventListener("play", handlePlay);
+        audio.addEventListener("pause", handlePause);
         audio.addEventListener("seeked", handleSeeked);
 
         if (audio.duration && !Number.isNaN(audio.duration)) {
@@ -125,23 +170,61 @@ export function usePlaybackEngine({
             audio.removeEventListener("loadedmetadata", updateDuration);
             audio.removeEventListener("durationchange", updateDuration);
             audio.removeEventListener("ended", handleEnded);
+            audio.removeEventListener("play", handlePlay);
+            audio.removeEventListener("pause", handlePause);
             audio.removeEventListener("seeked", handleSeeked);
         };
-    }, [recording.id, autoPlayNext, onEnded]);
+    }, []);
 
-    const togglePlayPause = useCallback(() => {
-        if (!audioRef.current) return;
-        if (isPlaying) {
-            audioRef.current.pause();
+    const togglePlayPause = useCallback(async () => {
+        const audio = audioRef.current;
+        if (!audio) return;
+        if (isPlaying || !audio.paused) {
+            audio.pause();
+            setIsPlaying(false);
         } else {
-            audioRef.current.playbackRate = playbackSpeed;
-            audioRef.current.play().catch((error) => {
+            audio.playbackRate = playbackSpeed;
+            try {
+                await audio.play();
+                setIsPlaying(!audio.paused);
+            } catch (error) {
+                setIsPlaying(false);
                 console.error("Error playing audio:", error);
                 toast.error("Failed to play audio");
-            });
+            }
         }
-        setIsPlaying(!isPlaying);
     }, [isPlaying, playbackSpeed]);
+
+    const seekToSeconds = useCallback((timeSeconds: number) => {
+        const audio = audioRef.current;
+        if (!audio || !Number.isFinite(timeSeconds)) return;
+        const audioDuration = audio.duration;
+        const newTime = Math.max(
+            0,
+            Number.isFinite(audioDuration) && audioDuration > 0
+                ? Math.min(audioDuration, timeSeconds)
+                : timeSeconds,
+        );
+        if (Math.abs(audio.currentTime - newTime) <= Number.EPSILON) {
+            pendingSeekTimeRef.current = null;
+            pendingSeekRetryRef.current = false;
+            setCurrentTime(audio.currentTime);
+            return;
+        }
+        pendingSeekTimeRef.current = newTime;
+        pendingSeekRetryRef.current = false;
+        setCurrentTime(newTime);
+        if (audio.readyState < HTMLMediaElement.HAVE_METADATA) return;
+        audio.currentTime = newTime;
+    }, []);
+
+    const seekToMilliseconds = useCallback(
+        (milliseconds: number) => {
+            if (!Number.isFinite(milliseconds)) return;
+            seekToSeconds(milliseconds / 1000);
+        },
+        [seekToSeconds],
+    );
 
     /**
      * Seek to a ratio in [0, 1] of the audio's duration. Used by both
@@ -149,22 +232,19 @@ export function usePlaybackEngine({
      * waveform click handler. Centralising means seek semantics stay
      * identical regardless of which control the user touches.
      */
-    const seekToRatio = useCallback((ratio: number) => {
-        const audio = audioRef.current;
-        if (!audio) return;
-        const audioDuration = audio.duration;
-        if (!audioDuration || Number.isNaN(audioDuration)) {
-            audio.load();
-            return;
-        }
-        const newTime = Math.max(
-            0,
-            Math.min(audioDuration, ratio * audioDuration),
-        );
-        isSeekingRef.current = true;
-        audio.currentTime = newTime;
-        setCurrentTime(newTime);
-    }, []);
+    const seekToRatio = useCallback(
+        (ratio: number) => {
+            const audio = audioRef.current;
+            if (!audio) return;
+            const audioDuration = audio.duration;
+            if (!audioDuration || Number.isNaN(audioDuration)) {
+                audio.load();
+                return;
+            }
+            seekToSeconds(ratio * audioDuration);
+        },
+        [seekToSeconds],
+    );
 
     /**
      * Seek by signed seconds offset (used by keyboard left/right).
@@ -178,10 +258,9 @@ export function usePlaybackEngine({
                 0,
                 Math.min(duration, currentTime + deltaSeconds),
             );
-            audio.currentTime = newTime;
-            setCurrentTime(newTime);
+            seekToSeconds(newTime);
         },
-        [currentTime, duration],
+        [currentTime, duration, seekToSeconds],
     );
 
     const cycleSpeed = useCallback(() => {
@@ -216,6 +295,7 @@ export function usePlaybackEngine({
         setVolume,
         playbackSpeed,
         togglePlayPause,
+        seekToMilliseconds,
         seekToRatio,
         seekRelative,
         cycleSpeed,
